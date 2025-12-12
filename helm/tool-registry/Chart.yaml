@@ -1,0 +1,26 @@
+apiVersion: v2
+name: tool-registry
+description: A Helm chart for Tool Registry MCP Server
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+home: https://github.com/your-org/tool-registry
+sources:
+  - https://github.com/your-org/tool-registry
+maintainers:
+  - name: Tool Registry Team
+    email: team@tool-registry.com
+keywords:
+  - mcp
+  - tools
+  - registry
+  - llm
+  - embeddings
+annotations:
+  category: DeveloperTools
+  licenses: MIT
+dependencies:
+  - name: postgresql
+    version: 12.x.x
+    repository: https://charts.bitnami.com/bitnami
+    condition: postgresql.enabled

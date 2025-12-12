@@ -1,0 +1,85 @@
+version: '3.8'
+
+services:
+  # PostgreSQL with pgvector extension
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: tool-registry-postgres
+    environment:
+      POSTGRES_USER: toolregistry
+      POSTGRES_PASSWORD: devpassword
+      POSTGRES_DB: toolregistry
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infrastructure/sql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U toolregistry"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - tool-registry-network
+
+  # Database migrations (run once before API starts)
+  migrations:
+    build:
+      context: .
+      dockerfile: Dockerfile.ubi8
+    container_name: tool-registry-migrations
+    environment:
+      DATABASE_URL: postgresql+asyncpg://toolregistry:devpassword@postgres:5432/toolregistry
+      EMBEDDING_ENDPOINT_URL: http://host.docker.internal:1234/v1/embeddings
+      EMBEDDING_API_KEY: lm-studio-key
+      LOG_LEVEL: INFO
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["python3.9", "-m", "alembic", "upgrade", "head"]
+    networks:
+      - tool-registry-network
+    restart: "no"  # Run once and exit
+
+  # Tool Registry API (using UBI8 production image)
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.ubi8
+    container_name: tool-registry-api
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://toolregistry:devpassword@postgres:5432/toolregistry
+      EMBEDDING_ENDPOINT_URL: http://host.docker.internal:1234/v1/embeddings
+      EMBEDDING_API_KEY: lm-studio-key
+      EMBEDDING_DIMENSION: 768  # Nomic-embed-text-v1.5 dimension
+      LOG_LEVEL: INFO
+      CORS_ORIGINS: "*"
+      SECRET_KEY: test-secret-key-for-development-only
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - tool-registry-network
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+    driver: local
+
+networks:
+  tool-registry-network:
+    driver: bridge

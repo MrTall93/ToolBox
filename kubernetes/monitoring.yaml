@@ -1,0 +1,165 @@
+apiVersion: v1
+kind: ServiceMonitor
+metadata:
+  name: tool-registry-metrics
+  namespace: tool-registry
+  labels:
+    app: tool-registry
+    component: monitoring
+    release: prometheus
+  annotations:
+    description: "Prometheus ServiceMonitor for Tool Registry"
+spec:
+  selector:
+    matchLabels:
+      app: tool-registry
+      component: api
+  endpoints:
+  - port: http
+    path: /metrics
+    interval: 30s
+    scrapeTimeout: 10s
+    honorLabels: true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-rules
+  namespace: tool-registry
+  labels:
+    app: tool-registry
+    component: monitoring
+data:
+  tool-registry.rules: |
+    groups:
+    - name: tool-registry.rules
+      rules:
+      - alert: ToolRegistryDown
+        expr: up{job="tool-registry"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Tool Registry MCP Server is down"
+          description: "Tool Registry MCP Server has been down for more than 1 minute."
+      - alert: ToolRegistryHighErrorRate
+        expr: rate(http_requests_total{job="tool-registry",status=~"5.."}[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Tool Registry high error rate"
+          description: "Tool Registry error rate is {{ $value }} errors per second."
+      - alert: ToolRegistryHighLatency
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="tool-registry"}[5m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Tool Registry high latency"
+          description: "Tool Registry 95th percentile latency is {{ $value }} seconds."
+      - alert: ToolRegistryMemoryUsage
+        expr: container_memory_usage_bytes{job="tool-registry"} / container_spec_memory_limit_bytes{job="tool-registry"} > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Tool Registry high memory usage"
+          description: "Tool Registry memory usage is above 90%."
+      - alert: ToolRegistryCPUUsage
+        expr: rate(container_cpu_usage_seconds_total{job="tool-registry"}[5m]) / container_spec_cpu_quota{job="tool-registry"} > 0.8
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Tool Registry high CPU usage"
+          description: "Tool Registry CPU usage is above 80%."
+      - alert: DatabaseConnectionFailure
+        expr: rate(http_requests_total{job="tool-registry",endpoint="/health",status=~"5.."}[5m]) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Database connection failures"
+          description: "Tool Registry is experiencing database connection failures."
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard
+  namespace: tool-registry
+  labels:
+    app: tool-registry
+    component: monitoring
+  annotations:
+    grafana_dashboard: "1"
+data:
+  dashboard.json: |
+    {
+      "dashboard": {
+        "id": null,
+        "title": "Tool Registry MCP Server",
+        "tags": ["tool-registry", "mcp"],
+        "timezone": "browser",
+        "panels": [
+          {
+            "id": 1,
+            "title": "Request Rate",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "rate(http_requests_total{job=\"tool-registry\"}[5m])",
+                "legendFormat": "{{method}} {{status}}"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+          },
+          {
+            "id": 2,
+            "title": "Response Time",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "histogram_quantile(0.50, rate(http_request_duration_seconds_bucket{job=\"tool-registry\"}[5m]))",
+                "legendFormat": "50th percentile"
+              },
+              {
+                "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job=\"tool-registry\"}[5m]))",
+                "legendFormat": "95th percentile"
+              },
+              {
+                "expr": "histogram_quantile(0.99, rate(http_request_duration_seconds_bucket{job=\"tool-registry\"}[5m]))",
+                "legendFormat": "99th percentile"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+          },
+          {
+            "id": 3,
+            "title": "Error Rate",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "rate(http_requests_total{job=\"tool-registry\",status=~\"5..\"}[5m])",
+                "legendFormat": "5xx errors"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 0, "y": 8}
+          },
+          {
+            "id": 4,
+            "title": "Memory Usage",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "container_memory_usage_bytes{job=\"tool-registry\"}",
+                "legendFormat": "Memory Usage"
+              }
+            ],
+            "gridPos": {"h": 8, "w": 12, "x": 12, "y": 8}
+          }
+        ],
+        "time": {"from": "now-1h", "to": "now"},
+        "refresh": "30s"
+      }
+    }

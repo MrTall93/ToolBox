@@ -1,0 +1,11 @@
+{{- if .Values.namespace.create }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.namespace.name | default (include "tool-registry.fullname" .) }}
+  labels:
+    name: {{ .Values.namespace.name | default (include "tool-registry.fullname" .) }}
+    environment: {{ .Values.environment | default "development" }}
+    app: {{ include "tool-registry.name" . }}
+    {{- include "tool-registry.labels" . | nindent 4 }}
+{{- end }}

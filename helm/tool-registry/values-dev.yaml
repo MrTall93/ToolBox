@@ -1,0 +1,159 @@
+# Development values for tool-registry
+# Override defaults for development deployment
+
+# Replica count for development
+replicaCount: 1
+
+# Development image configuration
+image:
+  registry: docker.io
+  repository: tool-registry
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+# Development resources (lower requirements)
+resources:
+  requests:
+    memory: "256Mi"
+    cpu: "100m"
+  limits:
+    memory: "512Mi"
+    cpu: "200m"
+
+# Disable autoscaling for development
+autoscaling:
+  enabled: false
+
+# Development service configuration
+service:
+  type: ClusterIP
+  external:
+    enabled: true
+    type: LoadBalancer
+    port: 80
+
+# Development ingress (optional)
+ingress:
+  enabled: false
+
+# Development configuration
+config:
+  app:
+    name: "tool-registry-mcp"
+    version: "1.0.0"
+    logLevel: "DEBUG"
+    workers: "1"
+
+  database:
+    poolSize: "2"
+    maxOverflow: "5"
+    timeout: "30"
+
+  search:
+    similarityThreshold: "0.5"  # Lower threshold for testing
+    searchLimit: "5"
+    hybridSearch: "true"
+
+  embedding:
+    dimension: "768"
+    enableCache: "true"
+    cacheSize: "100"
+    maxRetries: "1"
+    baseDelay: "0.5"
+    maxBatchSize: "10"
+    timeout: "10.0"
+    endpointUrl: "http://embedding-service:8001/embed"
+
+  performance:
+    enableCache: "true"
+    cacheTTL: "60"
+
+  cors:
+    origins: "*"
+
+  rateLimit:
+    enabled: "false"  # Disabled for development
+    requestsPerMinute: "1000"
+    burstSize: "100"
+
+# Development secrets
+secrets:
+  generate: false
+  databaseUrl: "postgresql+asyncpg://tool-registry:tool-registry-pass@tool-registry-postgresql:5432/tool-registry"
+  secretKey: "development-secret-key"
+  embeddingApiKey: "local-mm-service-api-key"
+  apiKey: "local-dev-api-token"
+  dbPassword: "tool-registry-pass"
+
+# Development PostgreSQL (smaller requirements)
+postgresql:
+  enabled: true
+  auth:
+    postgresPassword: "postgres-pass"
+    username: tool-registry
+    password: "tool-registry-pass"
+    database: tool-registry
+  primary:
+    persistence:
+      enabled: true
+      size: 5Gi
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "512Mi"
+        cpu: "200m"
+
+# Monitoring (optional for development)
+monitoring:
+  enabled: false
+
+# Network policies (optional for development)
+networkPolicy:
+  enabled: false
+
+# Development node selector and affinity (no restrictions)
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Development probes (more lenient)
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+startupProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 30
+
+# Development environment variables
+env:
+  - name: PYTHONUNBUFFERED
+    value: "1"
+  - name: ENVIRONMENT
+    value: "development"
+
+# Namespace for development
+namespace:
+  create: true
+  name: "tool-registry-dev"

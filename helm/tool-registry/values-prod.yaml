@@ -1,0 +1,300 @@
+# Production values for tool-registry
+# Override defaults for production deployment
+
+# Replica count for production
+replicaCount: 5
+
+# Production image configuration
+image:
+  registry: your-registry.com
+  repository: tool-registry
+  tag: "1.0.0"
+  pullPolicy: IfNotPresent
+  pullSecrets:
+    - name: registry-secret
+
+# Production resources
+resources:
+  requests:
+    memory: "1Gi"
+    cpu: "500m"
+  limits:
+    memory: "2Gi"
+    cpu: "1000m"
+
+# Production autoscaling
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 50
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+# Production service configuration
+service:
+  type: ClusterIP
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-internal: "0.0.0.0/0"
+
+# Production ingress configuration
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/force-ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    external-dns/is-public: "true"
+  hosts:
+    - host: api.tool-registry.yourdomain.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: tool-registry-prod-tls
+      hosts:
+        - api.tool-registry.yourdomain.com
+
+# Production configuration
+config:
+  app:
+    name: "tool-registry-mcp"
+    version: "1.0.0"
+    logLevel: "INFO"
+    workers: "8"
+
+  database:
+    poolSize: "10"
+    maxOverflow: "20"
+    timeout: "30"
+
+  search:
+    similarityThreshold: "0.7"
+    searchLimit: "10"
+    hybridSearch: "true"
+
+  embedding:
+    dimension: "1536"  # OpenAI Ada dimension
+    enableCache: "true"
+    cacheSize: "5000"
+    maxRetries: "3"
+    baseDelay: "1.0"
+    maxBatchSize: "100"
+    timeout: "30.0"
+    endpointUrl: "https://api.openai.com/v1/embeddings"  # Replace with your production embedding service
+
+  performance:
+    enableCache: "true"
+    cacheTTL: "300"
+
+  cors:
+    origins: "https://yourdomain.com,https://api.tool-registry.yourdomain.com"
+
+  rateLimit:
+    enabled: "true"
+    requestsPerMinute: "1000"
+    burstSize: "100"
+
+# Production secrets - should be set via external secret management
+secrets:
+  generate: false
+  # These should be managed via your secrets management system
+  databaseUrl: "postgresql+asyncpg://tool-registry:{{ .Values.postgresql.auth.password }}@{{ .Release.Name }}-postgresql:5432/{{ .Values.postgresql.auth.database }}"
+  secretKey: ""  # Set via external secret
+  embeddingApiKey: ""  # Set via external secret (OpenAI API key)
+  apiKey: ""  # Set via external secret
+
+# Production PostgreSQL
+postgresql:
+  enabled: true
+  auth:
+    existingSecret: "{{ .Release.Name }}-postgresql-secret"
+    username: tool-registry
+    database: tool-_registry
+  primary:
+    persistence:
+      enabled: true
+      storageClass: "fast-ssd"
+      size: 100Gi
+    resources:
+      requests:
+        memory: "2Gi"
+        cpu: "1000m"
+      limits:
+        memory: "8Gi"
+        cpu: "4000m"
+    extraEnvVars:
+      - name: POSTGRES_INITDB_ARGS
+        value: "-c logging_collector=on -c log_directory=/var/log/postgresql -c log_filename=postgresql.log -c max_connections=200"
+      - name: POSTGRES_HOST_AUTH_METHOD
+        value: "scram-sha-256"
+      - name: POSTGRES_SHARED_PRELOAD_LIBRARIES
+        value: "pg_stat_statements,pg_buffercache"
+    configuration: |
+      # Production PostgreSQL configuration
+      max_connections = 200
+      shared_buffers = 2GB
+      effective_cache_size = 6GB
+      work_mem = 8MB
+      maintenance_work_mem = 256MB
+      min_wal_size = 2GB
+      max_wal_size = 8GB
+      checkpoint_completion_target = 0.9
+      wal_buffers = 16MB
+      default_statistics_target = 100
+      random_page_cost = 1.1
+      effective_io_concurrency = 200
+
+# Production monitoring
+monitoring:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+    namespace: monitoring
+    labels:
+      release: prometheus
+  prometheusRule:
+    enabled: true
+    namespace: monitoring
+    labels:
+      release: prometheus
+    rules:
+      - alert: ToolRegistryDown
+        expr: up{job="tool-registry"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Tool Registry is down"
+          description: "Tool Registry has been down for more than 1 minute."
+          runbook_url: "https://runbooks.yourdomain.com/tool-registry-down"
+      - alert: ToolRegistryHighLatency
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="tool-registry"}[5m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Tool Registry high latency"
+          description: "95th percentile latency is {{ $value }}s for more than 5 minutes."
+          runbook_url: "https://runbooks.yourdomain.com/tool-registry-high-latency"
+      - alert: ToolRegistryHighErrorRate
+        expr: rate(http_requests_total{job="tool-registry",status=~"5.."}[5m]) / rate(http_requests_total{job="tool-registry"}[5m]) > 0.01
+        for: 2m
+        labels:
+          severity: critical
+          team: platform
+        annotations:
+          summary: "Tool Registry high error rate"
+          description: "Error rate is {{ $value | humanizePercentage }} for more than 2 minutes."
+          runbook_url: "https://runbooks.yourdomain.com/tool-registry-high-error-rate"
+      - alert: ToolRegistryMemoryUsage
+        expr: container_memory_usage_bytes{job="tool-registry"} / container_spec_memory_limit_bytes{job="tool-registry"} > 0.9
+        for: 5m
+        labels:
+          severity: warning
+          team: platform
+        annotations:
+          summary: "Tool Registry high memory usage"
+          description: "Memory usage is {{ $value | humanizePercentage }} of limit."
+          runbook_url: "https://runbooks.yourdomain.com/tool-registry-memory"
+
+# Production network policies
+networkPolicy:
+  enabled: true
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+        - namespaceSelector:
+            matchLabels:
+              name: monitoring
+      ports:
+        - protocol: TCP
+          port: 8000
+  egress:
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 53
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 443
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgresql
+      ports:
+        - protocol: TCP
+          port: 5432
+
+# Production node selector and affinity
+nodeSelector:
+  node-type: application
+
+tolerations:
+  - key: "application"
+    operator: "Equal"
+    value: "true"
+    effect: "NoSchedule"
+
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          labelSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values:
+                  - tool-registry
+          topologyKey: kubernetes.io/hostname
+
+# Production probes with more conservative settings
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 60
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+startupProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 60
+
+# Production environment variables
+env:
+  - name: PYTHONUNBUFFERED
+    value: "1"
+  - name: ENVIRONMENT
+    value: "production"
+
+# Deployment annotations for production
+deploymentAnnotations:
+  configmap.reloader.stakater.com/reload: "tool-registry-config"
+  secret.reloader.stakater.com/reload: "tool-registry-secrets"

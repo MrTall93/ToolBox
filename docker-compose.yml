@@ -1,0 +1,85 @@
+version: '3.8'
+
+services:
+  # PostgreSQL with pgvector extension
+  postgres:
+    image: ankane/pgvector:latest
+    container_name: tool-registry-postgres
+    environment:
+      POSTGRES_USER: toolregistry
+      POSTGRES_PASSWORD: devpassword
+      POSTGRES_DB: toolregistry
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./infrastructure/sql/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U toolregistry"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - tool-registry-network
+
+  # Database migrations (run once before API starts)
+  migrations:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tool-registry-migrations
+    environment:
+      DATABASE_URL: postgresql+asyncpg://toolregistry:devpassword@postgres:5432/toolregistry
+      EMBEDDING_ENDPOINT_URL: ${EMBEDDING_ENDPOINT_URL:-http://localhost:8001/embed}
+      LOG_LEVEL: ${LOG_LEVEL:-DEBUG}
+    volumes:
+      - ./app:/app/app
+      - ./alembic:/app/alembic
+      - ./alembic.ini:/app/alembic.ini
+      - ./scripts:/app/scripts
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: /bin/bash /app/scripts/run_migrations.sh
+    networks:
+      - tool-registry-network
+    restart: "no"  # Run once and exit
+
+  # FastAPI application (for local development)
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tool-registry-api
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://toolregistry:devpassword@postgres:5432/toolregistry
+      EMBEDDING_ENDPOINT_URL: ${EMBEDDING_ENDPOINT_URL:-http://localhost:8001/embed}
+      EMBEDDING_API_KEY: ${EMBEDDING_API_KEY:-}
+      EMBEDDING_DIMENSION: ${EMBEDDING_DIMENSION:-1536}
+      LOG_LEVEL: ${LOG_LEVEL:-DEBUG}
+      CORS_ORIGINS: "*"
+    volumes:
+      # Mount source code for hot reload in development
+      - ./app:/app/app
+      - ./tests:/app/tests
+      - ./alembic:/app/alembic
+      - ./alembic.ini:/app/alembic.ini
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    networks:
+      - tool-registry-network
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+    driver: local
+
+networks:
+  tool-registry-network:
+    driver: bridge

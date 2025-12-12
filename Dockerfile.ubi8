@@ -1,0 +1,79 @@
+# Multi-stage build using Red Hat Universal Base Image 8
+
+# Stage 1: Builder
+FROM registry.access.redhat.com/ubi8/python-39 AS builder
+
+USER root
+
+WORKDIR /build
+
+# Install build dependencies
+RUN dnf install -y --setopt=install_weak_deps=False \
+    gcc \
+    python39-devel \
+    libpq-devel \
+    && dnf clean all
+
+# Copy requirements
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN python3.9 -m pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    python3.9 -m pip install --no-cache-dir -r requirements.txt
+
+# Stage 2: Runtime
+FROM registry.access.redhat.com/ubi8/python-39
+
+USER root
+
+# Install runtime dependencies
+RUN dnf install -y --setopt=install_weak_deps=False \
+    libpq \
+    curl \
+    && dnf clean all
+
+# Create app directory
+WORKDIR /app
+
+# Create non-root user (UID 1000 is standard in OpenShift)
+RUN groupadd -g 1000 appgroup && \
+    useradd -u 1000 -g appgroup -d /app -s /sbin/nologin -c "Default Application User" appuser
+
+# Copy Python packages from builder (UBI8 uses /opt/app-root/)
+COPY --from=builder /opt/app-root/lib/python3.9/site-packages/ /opt/app-root/lib/python3.9/site-packages/
+COPY --from=builder /opt/app-root/bin/ /opt/app-root/bin/
+
+# Copy application code
+COPY app/ /app/app/
+COPY alembic.ini /app/
+COPY alembic/ /app/alembic/
+COPY scripts/ /app/scripts/
+
+# Create directories and set permissions
+RUN mkdir -p /app/tmp /app/logs && \
+    chown -R 1000:0 /app && \
+    chmod -R g+rwX /app
+
+# Make scripts executable
+RUN chmod +x /app/scripts/*.sh 2>/dev/null || true
+
+# Switch to non-root user
+USER 1000
+
+# Expose port
+EXPOSE 8000
+
+# Set environment variables for non-root user
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+
+# Health check using curl (more reliable in UBI8)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Kubernetes readiness probe endpoint will be available at /ready
+# Kubernetes liveness probe endpoint will be available at /live
+
+# Update PATH for UBI8 and run the application
+ENV PATH="/opt/app-root/bin:$PATH"
+CMD ["python3.9", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -1,0 +1,174 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: tool-registry
+  labels:
+    app: postgres
+    component: storage
+  annotations:
+    description: "PostgreSQL PVC for Tool Registry"
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: standard  # Local cluster storage class
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: tool-registry
+  labels:
+    app: postgres
+    component: database
+  annotations:
+    description: "PostgreSQL with pgvector for Tool Registry"
+spec:
+  serviceName: postgres-service
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+      component: database
+  template:
+    metadata:
+      labels:
+        app: postgres
+        component: database
+    spec:
+      securityContext:
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        runAsNonRoot: true
+      containers:
+      - name: postgres
+        image: pgvector/pgvector:pg16
+        imagePullPolicy: IfNotPresent
+        ports:
+        - containerPort: 5432
+          name: postgres
+          protocol: TCP
+        env:
+        - name: POSTGRES_DB
+          value: tool-registry
+        - name: POSTGRES_USER
+          value: tool-registry
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: tool-registry-secrets
+              key: DB_PASSWORD  # You'll need to add this to secrets
+        - name: POSTGRES_INITDB_ARGS
+          value: "-c logging_collector=on -c log_directory=/var/log/postgresql -c log_filename=postgresql.log"
+        - name: PGDATA
+          value: /var/lib/postgresql/data/pgdata
+        - name: POSTGRES_HOST_AUTH_METHOD
+          value: "scram-sha-256"
+        volumeMounts:
+        - name: postgres-storage
+          mountPath: /var/lib/postgresql/data
+        - name: postgres-logs
+          mountPath: /var/log/postgresql
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+        livenessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - tool-registry
+            - -d
+            - tool-registry
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          exec:
+            command:
+            - pg_isready
+            - -U
+            - tool-registry
+            - -d
+            - tool-registry
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+      volumes:
+      - name: postgres-storage
+        persistentVolumeClaim:
+          claimName: postgres-pvc
+      - name: postgres-logs
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-service
+  namespace: tool-registry
+  labels:
+    app: postgres
+    component: service
+  annotations:
+    description: "PostgreSQL service for Tool Registry"
+spec:
+  type: ClusterIP
+  ports:
+  - port: 5432
+    targetPort: 5432
+    protocol: TCP
+    name: postgres
+  selector:
+    app: postgres
+    component: database
+---
+# ConfigMap for PostgreSQL initialization
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  namespace: tool-registry
+  labels:
+    app: postgres
+    component: init
+data:
+  init.sql: |
+    -- PostgreSQL initialization script for Tool Registry
+
+    -- Enable required extensions
+    CREATE EXTENSION IF NOT EXISTS vector;
+    CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+    -- Create additional indexes for better performance
+    CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_tools_created_at_desc
+    ON tools (created_at DESC);
+
+    CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_tools_name_gin
+    ON tools USING gin (name gin_trgm_ops);
+
+    CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_tools_description_gin
+    ON tools USING gin (description gin_trgm_ops);
+
+    -- Enable pg_stat_statements for query performance monitoring
+    CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+
+    -- Enable pg_buffercache for buffer cache monitoring
+    CREATE EXTENSION IF NOT EXISTS pg_buffercache;
+
+    -- Configuration for pgvector
+    ALTER SYSTEM SET ivfflat.probes = 10;
+
+    -- Grant permissions
+    GRANT ALL ON SCHEMA public TO PUBLIC;
+    GRANT ALL ON ALL TABLES IN SCHEMA public TO PUBLIC;
+    GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO PUBLIC;

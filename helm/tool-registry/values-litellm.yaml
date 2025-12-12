@@ -1,0 +1,355 @@
+# LiteLLM Integration Values for Tool Registry Helm Chart
+# Use this values file to deploy Tool Registry with LiteLLM gateway integration
+
+# Tool Registry configuration
+replicaCount: 3
+
+toolRegistry:
+  # Enable LiteLLM adapter
+  litellm:
+    enabled: true
+    # MCP server configuration for LiteLLM
+    mcp:
+      # URL for LiteLLM to connect to
+      serverUrl: "http://{{ .Release.Name }}-service.{{ .Release.Namespace }}.svc.cluster.local:80/mcp"
+      # Authentication for LiteLLM
+      apiKey:
+        # Create API key for LiteLLM
+        create: true
+        # Or use existing secret
+        existingSecret: ""
+        existingSecretKey: "api-key"
+
+  # Resource limits for production
+  resources:
+    requests:
+      memory: "1Gi"
+      cpu: "500m"
+    limits:
+      memory: "2Gi"
+      cpu: "1000m"
+
+  # Environment variables
+  env:
+    # LiteLLM integration settings
+    LITELM_MCP_SERVER_URL: "http://{{ .Release.Name }}-service.{{ .Release.Namespace }}.svc.cluster.local"
+    LITELM_MCP_TIMEOUT: "30"
+    LITELM_MCP_MAX_RETRIES: "3"
+
+  # Additional annotations for LiteLLM
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8000"
+    prometheus.io/path: "/metrics"
+
+# LiteLLM Gateway deployment
+litellm:
+  # Enable LiteLLM gateway
+  enabled: true
+
+  # Replica count for LiteLLM
+  replicaCount: 2
+
+  # Image configuration
+  image:
+    repository: ghcr.io/berriai/litellm
+    tag: "main-latest"
+    pullPolicy: IfNotPresent
+
+  # Resource limits
+  resources:
+    requests:
+      memory: "512Mi"
+      cpu: "250m"
+    limits:
+      memory: "1Gi"
+      cpu: "500m"
+
+  # Service configuration
+  service:
+    type: ClusterIP
+    port: 4000
+    targetPort: 4000
+
+  # Ingress configuration for LiteLLM
+  ingress:
+    enabled: true
+    className: "nginx"
+    annotations:
+      nginx.ingress.kubernetes.io/rewrite-target: /
+      cert-manager.io/cluster-issuer: "letsencrypt-prod"
+    hosts:
+      - host: "litellm-api.yourdomain.com"
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - secretName: "{{ .Release.Name }}-litellm-tls"
+        hosts:
+          - "litellm-api.yourdomain.com"
+
+  # Configuration
+  config:
+    # Load from config map (see configmaps.yaml)
+    existingConfigMap: "{{ .Release.Name }}-litellm-config"
+
+  # Environment variables
+  env:
+    # Model provider API keys (should be set via secrets)
+    OPENAI_API_KEY:
+      valueFrom:
+        secretKeyRef:
+          name: "{{ .Release.Name }}-litellm-secrets"
+          key: "openai-api-key"
+    ANTHROPIC_API_KEY:
+      valueFrom:
+        secretKeyRef:
+          name: "{{ .Release.Name }}-litellm-secrets"
+          key: "anthropic-api-key"
+
+    # Tool Registry connection
+    TOOL_REGISTRY_API_KEY:
+      valueFrom:
+        secretKeyRef:
+          name: "{{ .Release.Name }}-secrets"
+          key: "api-key"
+
+    # Redis configuration
+    REDIS_HOST: "{{ .Release.Name }}-redis-master"
+    REDIS_PORT: "6379"
+
+    # General settings
+    LITELM_LOG: "INFO"
+    LITELM_REQUEST_TIMEOUT: "60"
+    LITELM_NUM_RETRIES: "3"
+
+    # Security
+    LITELM_API_KEY:
+      valueFrom:
+        secretKeyRef:
+          name: "{{ .Release.Name }}-litellm-secrets"
+          key: "litellm-api-key"
+    LITELM_SALT_KEY:
+      valueFrom:
+        secretKeyRef:
+          name: "{{ .Release.Name }}-litellm-secrets"
+          key: "litellm-salt-key"
+
+  # Health checks
+  livenessProbe:
+    httpGet:
+      path: /health
+      port: 4000
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: 4000
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+  # HPA configuration
+  autoscaling:
+    enabled: true
+    minReplicas: 2
+    maxReplicas: 10
+    targetCPUUtilizationPercentage: 70
+    targetMemoryUtilizationPercentage: 80
+
+# Redis for LiteLLM caching
+redis:
+  enabled: true
+  auth:
+    enabled: true
+    existingSecret: "{{ .Release.Name }}-litellm-secrets"
+    existingSecretPasswordKey: "redis-password"
+  master:
+    persistence:
+      enabled: true
+      size: 8Gi
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "512Mi"
+        cpu: "250m"
+  replica:
+    replicaCount: 2
+    persistence:
+      enabled: true
+      size: 8Gi
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "100m"
+      limits:
+        memory: "512Mi"
+        cpu: "250m"
+
+# PostgreSQL configuration
+postgresql:
+  auth:
+    existingSecret: "{{ .Release.Name }}-postgresql-secret"
+  primary:
+    persistence:
+      enabled: true
+      size: 20Gi
+    resources:
+      requests:
+        memory: "2Gi"
+        cpu: "1000m"
+      limits:
+        memory: "4Gi"
+        cpu: "2000m"
+    # Additional configuration for performance
+    extraConfig: |
+      # PostgreSQL configuration for LiteLLM and Tool Registry
+      max_connections = 200
+      shared_buffers = 512MB
+      effective_cache_size = 2GB
+      maintenance_work_mem = 128MB
+      checkpoint_completion_target = 0.9
+      wal_buffers = 16MB
+      default_statistics_target = 100
+      random_page_cost = 1.1
+      effective_io_concurrency = 200
+      work_mem = 4MB
+      min_wal_size = 1GB
+      max_wal_size = 4GB
+
+# Ingress configuration
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "*"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  hosts:
+    - host: "api.yourdomain.com"
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: "{{ .Release.Name }}-tls"
+      hosts:
+        - "api.yourdomain.com"
+
+# Network policies
+networkPolicy:
+  enabled: true
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: "{{ .Release.Namespace }}"
+        - namespaceSelector:
+            matchLabels:
+              name: "ingress-nginx"
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              name: "{{ .Release.Namespace }}"
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 53
+        - protocol: UDP
+          port: 53
+
+# Pod security policies
+podSecurityPolicy:
+  enabled: true
+
+# Service monitor for Prometheus
+serviceMonitor:
+  enabled: true
+  namespace: monitoring
+  labels:
+    release: prometheus
+  interval: 30s
+  scrapeTimeout: 10s
+
+# Prometheus rules
+prometheusRules:
+  enabled: true
+  namespace: monitoring
+  labels:
+    release: prometheus
+  rules:
+    - alert: ToolRegistryDown
+      expr: up{job="{{ .Release.Name }}"} == 0
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Tool Registry is down"
+        description: "Tool Registry {{ $labels.instance }} has been down for more than 1 minute"
+
+    - alert: LiteLLMDown
+      expr: up{job="{{ .Release.Name }}-litellm"} == 0
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: "LiteLLM Gateway is down"
+        description: "LiteLLM Gateway {{ $labels.instance }} has been down for more than 1 minute"
+
+    - alert: HighMemoryUsage
+      expr: container_memory_usage_bytes / container_spec_memory_limit_bytes > 0.8
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "High memory usage"
+        description: "Memory usage is above 80% for {{ $labels.container }}"
+
+# Horizontal Pod Autoscaler
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 20
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 10
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 60
+
+# Resource quotas
+resourceQuota:
+  enabled: true
+  requests:
+    cpu: "10"
+    memory: "20Gi"
+  limits:
+    cpu: "20"
+    memory: "40Gi"
+
+# Pod disruption budget
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+  maxUnavailable: 1

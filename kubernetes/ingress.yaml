@@ -1,0 +1,55 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: tool-registry-ingress
+  namespace: tool-registry
+  labels:
+    app: tool-registry
+    component: ingress
+  annotations:
+    description: "Tool Registry MCP Server ingress"
+    # NGINX Ingress Controller annotations
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    # CORS annotations
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-origin: "*"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, PUT, DELETE, OPTIONS"
+    nginx.ingress.kubernetes.io/cors-allow-headers: "DNT,User-Agent,X-Requested-With,If-Modified-Since,Cache-Control,Content-Type,Range,Authorization"
+    # Rate limiting
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/rate-limit-window: "1m"
+    # Custom error pages
+    nginx.ingress.kubernetes.io/custom-http-errors: "404,503,502"
+spec:
+  ingressClassName: nginx  # Use your ingress controller class
+  tls:
+  - hosts:
+    - api.tool-registry.yourdomain.com  # Replace with your domain
+    secretName: tool-registry-tls  # Reference to TLS secret
+  rules:
+  - host: api.tool-registry.yourdomain.com  # Replace with your domain
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: tool-registry-service
+            port:
+              number: 80
+  # Optional: Add additional host rules
+  # - host: tool-registry.internal.yourdomain.com
+  #   http:
+  #     paths:
+  #     - path: /
+  #       pathType: Prefix
+  #       backend:
+  #         service:
+  #           name: tool-registry-service
+  #           port:
+  #             number: 80

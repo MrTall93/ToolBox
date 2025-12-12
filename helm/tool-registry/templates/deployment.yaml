@@ -1,0 +1,199 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tool-registry.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ include "tool-registry.name" . }}
+    component: api
+    {{- include "tool-registry.labels" . | nindent 4 }}
+  {{- with .Values.deploymentAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: {{ include "tool-registry.name" . }}
+      component: api
+      {{- include "tool-registry.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "tool-registry.name" . }}
+        component: api
+        version: v1.0.0
+        {{- include "tool-registry.selectorLabels" . | nindent 8 }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "{{ .Values.service.internalPort }}"
+        prometheus.io/path: "/metrics"
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      serviceAccountName: {{ include "tool-registry.serviceAccountName" . }}
+      {{- with .Values.image.pullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+
+      # Init container for database migrations
+      initContainers:
+      - name: migrations
+        image: "{{ .Values.image.registry }}/{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - ALL
+        command: ["alembic", "upgrade", "head"]
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "tool-registry.fullname" . }}-secrets
+              key: DATABASE_URL
+        volumeMounts:
+        - name: tmp
+          mountPath: /app/tmp
+        - name: logs
+          mountPath: /app/logs
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+
+      {{- with .Values.initContainers }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+
+      # Main application container
+      containers:
+      - name: {{ include "tool-registry.name" . }}
+        image: "{{ .Values.image.registry }}/{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        ports:
+        - containerPort: {{ .Values.service.internalPort }}
+          name: http
+          protocol: TCP
+
+        # Container security context
+        securityContext:
+          {{- toYaml .Values.securityContext | nindent 10 }}
+
+        # Environment variables
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "tool-registry.fullname" . }}-secrets
+              key: DATABASE_URL
+        - name: SECRET_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "tool-registry.fullname" . }}-secrets
+              key: SECRET_KEY
+        - name: EMBEDDING_ENDPOINT_URL
+          value: {{ .Values.config.embedding.endpointUrl | quote }}
+        - name: EMBEDDING_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "tool-registry.fullname" . }}-secrets
+              key: EMBEDDING_API_KEY
+        - name: API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: {{ include "tool-registry.fullname" . }}-secrets
+              key: API_KEY
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: {{ include "tool-registry.fullname" . }}-config
+              key: LOG_LEVEL
+
+        # ConfigMap environment variables
+        {{- range $key, $value := .Values.config }}
+        {{- if kindIs "map" $value }}
+        {{- range $subkey, $subvalue := $value }}
+        - name: {{ $key | upper }}_{{ $subkey | upper | replace "." "_" | replace "-" "_" }}
+          valueFrom:
+            configMapKeyRef:
+              name: {{ include "tool-registry.fullname" $ }}
+              key: {{ $key | upper }}_{{ $subkey | upper | replace "." "_" | replace "-" "_" }}
+        {{- end }}
+        {{- end }}
+        {{- end }}
+
+        # Additional environment variables from values
+        {{- with .Values.env }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+
+        # Environment from config maps and secrets
+        {{- with .Values.envFrom }}
+        envFrom:
+          {{- toYaml . | nindent 8 }}
+        {{- end }}
+
+        volumeMounts:
+        - name: tmp
+          mountPath: /app/tmp
+        - name: logs
+          mountPath: /app/logs
+        {{- with .Values.extraVolumeMounts }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+
+        # Health checks
+        livenessProbe:
+          {{- toYaml .Values.livenessProbe | nindent 10 }}
+        readinessProbe:
+          {{- toYaml .Values.readinessProbe | nindent 10 }}
+        startupProbe:
+          {{- toYaml .Values.startupProbe | nindent 10 }}
+
+        # Resources
+        resources:
+          {{- toYaml .Values.resources | nindent 10 }}
+
+      {{- with .Values.sidecars }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+
+      volumes:
+      - name: tmp
+        emptyDir: {}
+      - name: logs
+        emptyDir: {}
+      {{- with .Values.extraVolumes }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

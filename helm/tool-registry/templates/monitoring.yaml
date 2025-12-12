@@ -1,0 +1,79 @@
+{{- if .Values.monitoring.enabled }}
+---
+{{- if .Values.monitoring.serviceMonitor.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "tool-registry.fullname" . }}-metrics
+  namespace: {{ .Values.monitoring.serviceMonitor.namespace | default .Release.Namespace }}
+  labels:
+    app: {{ include "tool-registry.name" . }}
+    component: monitoring
+    {{- if .Values.monitoring.serviceMonitor.labels }}
+    {{- toYaml .Values.monitoring.serviceMonitor.labels | nindent 4 }}
+    {{- end }}
+    {{- include "tool-registry.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app: {{ include "tool-registry.name" . }}
+      component: service
+      {{- include "tool-registry.selectorLabels" . | nindent 6 }}
+  endpoints:
+  - port: http
+    path: {{ .Values.monitoring.serviceMonitor.path | default "/metrics" }}
+    interval: {{ .Values.monitoring.serviceMonitor.interval | default "30s" }}
+    scrapeTimeout: 10s
+{{- end }}
+
+---
+{{- if .Values.monitoring.prometheusRule.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "tool-registry.fullname" . }}-alerts
+  namespace: {{ .Values.monitoring.prometheusRule.namespace | default .Release.Namespace }}
+  labels:
+    app: {{ include "tool-registry.name" . }}
+    component: alerts
+    {{- if .Values.monitoring.prometheusRule.labels }}
+    {{- toYaml .Values.monitoring.prometheusRule.labels | nindent 4 }}
+    {{- end }}
+    {{- include "tool-registry.labels" . | nindent 4 }}
+spec:
+  groups:
+  - name: {{ include "tool-registry.fullname" . }}.rules
+    rules:
+    {{- if .Values.monitoring.prometheusRule.rules }}
+    {{- toYaml .Values.monitoring.prometheusRule.rules | nindent 4 }}
+    {{- else }}
+    # Default alerting rules
+    - alert: ToolRegistryDown
+      expr: up{job="{{ include "tool-registry.fullname" . }}"} == 0
+      for: 1m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Tool Registry is down"
+        description: "Tool Registry {{ include "tool-registry.fullname" . }} has been down for more than 1 minute."
+
+    - alert: ToolRegistryHighLatency
+      expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="{{ include "tool-registry.fullname" . }}"}[5m])) > 1
+      for: 2m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Tool Registry high latency"
+        description: "95th percentile latency is {{`{{ $value }}`}}s for more than 2 minutes."
+
+    - alert: ToolRegistryHighErrorRate
+      expr: rate(http_requests_total{job="{{ include "tool-registry.fullname" . }}",status=~"5.."}[5m]) / rate(http_requests_total{job="{{ include "tool-registry.fullname" . }}"}[5m]) > 0.01
+      for: 2m
+      labels:
+        severity: critical
+      annotations:
+        summary: "Tool Registry high error rate"
+        description: "Error rate is {{`{{ $value | humanizePercentage }}`}} for more than 2 minutes."
+    {{- end }}
+{{- end }}
+{{- end }}

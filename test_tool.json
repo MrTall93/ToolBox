@@ -1,0 +1,15 @@
+{
+  "name": "test_calculator",
+  "description": "A simple calculator that performs basic math operations",
+  "category": "Utility",
+  "tags": ["math", "calculator", "basic"],
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "expression": {"type": "string", "description": "Mathematical expression to evaluate"}
+    },
+    "required": ["expression"]
+  },
+  "implementation_type": "python_function",
+  "implementation_code": "def execute(expression): return eval(expression)"
+}

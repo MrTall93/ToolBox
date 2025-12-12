@@ -1,0 +1,301 @@
+# Default values for tool-registry.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# Global settings
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+  storageClass: ""
+
+# Tool Registry configuration
+replicaCount: 3
+
+image:
+  registry: docker.io
+  repository: tool-registry
+  tag: "latest"
+  pullPolicy: IfNotPresent
+  pullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  fsGroup: 1000
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+    - ALL
+  readOnlyRootFilesystem: true
+
+# Resource configuration
+resources:
+  requests:
+    memory: "512Mi"
+    cpu: "250m"
+  limits:
+    memory: "1Gi"
+    cpu: "500m"
+
+# Autoscaling
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 20
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+# Service configuration
+service:
+  enabled: true
+  type: ClusterIP
+  port: 80
+  annotations: {}
+  external:
+    enabled: false
+    type: LoadBalancer
+    port: 80
+    annotations: {}
+  internalPort: 8000
+
+# Ingress configuration
+ingress:
+  enabled: true
+  className: "nginx"
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    cert-manager.io/cluster-issuer: "letsencrypt-prod"
+  hosts:
+    - host: tool-registry.yourdomain.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: tool-registry-tls
+      hosts:
+        - tool-registry.yourdomain.com
+
+# Application configuration
+config:
+  app:
+    name: "tool-registry-mcp"
+    version: "1.0.0"
+    logLevel: "INFO"
+    workers: "4"
+
+  database:
+    poolSize: "5"
+    maxOverflow: "10"
+    timeout: "30"
+
+  search:
+    similarityThreshold: "0.7"
+    searchLimit: "5"
+    hybridSearch: "true"
+
+  embedding:
+    dimension: "768"
+    enableCache: "true"
+    cacheSize: "1000"
+    maxRetries: "3"
+    baseDelay: "1.0"
+    maxBatchSize: "100"
+    timeout: "30.0"
+    endpointUrl: "http://embedding-service:8001/embed"
+
+  performance:
+    enableCache: "true"
+    cacheTTL: "300"
+
+  cors:
+    origins: "*"
+
+  rateLimit:
+    enabled: "true"
+    requestsPerMinute: "60"
+    burstSize: "10"
+
+# Secret configuration
+secrets:
+  # Set to true to generate random secrets
+  generate: false
+
+  # Or provide your own secrets
+  databaseUrl: ""
+  secretKey: ""
+  embeddingApiKey: ""
+  apiKey: ""
+
+  # Database specific secrets
+  dbPassword: ""
+  dbUser: "tool-registry"
+  dbName: "tool-registry"
+
+# PostgreSQL configuration (using bitnami chart)
+postgresql:
+  enabled: true
+  auth:
+    postgresPassword: ""
+    username: tool-registry
+    password: ""
+    database: tool-registry
+    existingSecret: ""
+  primary:
+    persistence:
+      enabled: true
+      storageClass: ""
+      size: 20Gi
+    resources:
+      requests:
+        memory: "1Gi"
+        cpu: "500m"
+      limits:
+        memory: "4Gi"
+        cpu: "2000m"
+    extraEnvVars:
+      - name: POSTGRES_INITDB_ARGS
+        value: "-c logging_collector=on -c log_directory=/var/log/postgresql -c log_filename=postgresql.log"
+      - name: POSTGRES_HOST_AUTH_METHOD
+        value: "scram-sha-256"
+  initdb:
+    scripts:
+      init.sql: |
+        -- Enable required extensions
+        CREATE EXTENSION IF NOT EXISTS vector;
+        CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+        -- Configuration for pgvector
+        ALTER SYSTEM SET ivfflat.probes = 10;
+
+        -- Grant permissions
+        GRANT ALL ON SCHEMA public TO PUBLIC;
+        GRANT ALL ON ALL TABLES IN SCHEMA public TO PUBLIC;
+
+# Monitoring
+monitoring:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+    path: "/metrics"
+  prometheusRule:
+    enabled: true
+    rules:
+      - alert: ToolRegistryDown
+        expr: up{job="tool-registry"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Tool Registry is down"
+          description: "Tool Registry has been down for more than 1 minute."
+      - alert: ToolRegistryHighLatency
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="tool-registry"}[5m])) > 1
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Tool Registry high latency"
+          description: "95th percentile latency is {{ $value }}s"
+
+# Network policies
+networkPolicy:
+  enabled: true
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              name: ingress-nginx
+      ports:
+        - protocol: TCP
+          port: 8000
+  egress:
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 53
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 5432
+
+# Node selector and tolerations
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Namespace configuration
+namespace:
+  create: false
+  name: ""
+
+# RBAC configuration
+rbac:
+  create: true
+
+# Additional volumes and mounts
+extraVolumes: []
+extraVolumeMounts: []
+
+# Init containers
+initContainers: []
+
+# Sidecar containers
+sidecars: []
+
+# Liveness and readiness probes
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /ready
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# Startup probe
+startupProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 30
+
+# Environment variables
+env: []
+envFrom: []
+
+# Deployment annotations
+deploymentAnnotations: {}

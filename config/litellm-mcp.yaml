@@ -1,0 +1,164 @@
+# LiteLLM MCP Gateway Configuration for Tool Registry
+# This configuration allows LiteLLM to connect to your Tool Registry MCP Server
+
+litellm:
+  # MCP server connection configuration
+  mcp_servers:
+    - name: "tool-registry"
+      description: "Tool Registry MCP Server for semantic tool discovery and execution"
+      connection:
+        # Connection details for your Tool Registry MCP Server
+        host: "localhost"  # Update to your deployment host
+        port: 8000         # Update to your deployment port
+        protocol: "http"   # Change to "https" for production
+        base_path: "/mcp"  # MCP endpoint base path
+
+        # Authentication configuration
+        auth:
+          type: "api_key"  # Supports: api_key, bearer_token, none
+          api_key: "${TOOL_REGISTRY_API_KEY}"  # Set via environment variable
+          # Alternative: Bearer token
+          # bearer_token: "${TOOL_REGISTRY_BEARER_TOKEN}"
+
+      # MCP protocol configuration
+      protocol:
+        version: "1.0"  # MCP protocol version
+        timeout: 30     # Request timeout in seconds
+        retry_attempts: 3
+        retry_delay: 1  # Seconds between retries
+
+      # Tool registry specific configuration
+      tool_registry:
+        # Tool discovery settings
+        discovery:
+          # Enable semantic search via embeddings
+          semantic_search: true
+          similarity_threshold: 0.7
+          max_results: 10
+
+        # Tool execution settings
+        execution:
+          # Enable tool execution through LiteLLM
+          enabled: true
+          # Execution timeout in seconds
+          timeout: 60
+          # Maximum concurrent executions
+          max_concurrent: 5
+
+        # Caching settings
+        cache:
+          # Cache tool discovery results
+          enabled: true
+          ttl: 300  # Cache TTL in seconds
+          max_size: 1000  # Maximum cached tools
+
+  # Model provider configuration (LiteLLM standard config)
+  model_list:
+    # Your LLM model configurations here
+    # Example:
+    # - model_name: "gpt-4"
+    #   litellm_params:
+    #     model: "openai/gpt-4"
+    #     api_key: "${OPENAI_API_KEY}"
+    # - model_name: "claude-3-sonnet"
+    #   litellm_params:
+    #     model: "anthropic/claude-3-sonnet-20240229"
+    #     api_key: "${ANTHROPIC_API_KEY}"
+
+  # General LiteLLM settings
+  settings:
+    # Server settings
+    host: "0.0.0.0"
+    port: 4000
+
+    # Security settings
+    security:
+      # Enable API key validation
+      require_api_key: true
+      # Add CORS headers
+      add_cors_headers: true
+      # Allowed origins for CORS
+      allowed_origins:
+        - "http://localhost:3000"
+        - "http://localhost:8080"
+        - "http://localhost:8000"
+
+    # Performance settings
+    performance:
+      # Enable response caching
+      cache: true
+      cache_type: "redis"  # Options: memory, redis
+      cache_ttl: 3600  # 1 hour
+
+      # Enable request queuing
+      enable_queue: true
+      max_queue_size: 1000
+
+      # Rate limiting
+      rate_limiting:
+        enabled: true
+        requests_per_minute: 60
+
+    # Logging settings
+    logging:
+      level: "INFO"
+      format: "json"
+      # Enable detailed request/response logging
+      verbose: false
+
+  # Environment-specific overrides
+  environments:
+    development:
+      litellm:
+        settings:
+          performance:
+            cache: false  # Disable cache in development
+          logging:
+            level: "DEBUG"
+            verbose: true
+
+    staging:
+      litellm:
+        mcp_servers:
+          - name: "tool-registry"
+            connection:
+              host: "staging-api.yourdomain.com"
+              protocol: "https"
+
+    production:
+      litellm:
+        settings:
+          performance:
+            cache_type: "redis"
+          security:
+            require_api_key: true
+          logging:
+            level: "WARNING"
+        mcp_servers:
+          - name: "tool-registry"
+            connection:
+              host: "api.yourdomain.com"
+              protocol: "https"
+              auth:
+                type: "api_key"
+                api_key: "${PROD_TOOL_REGISTRY_API_KEY}"
+
+# Monitoring and observability
+monitoring:
+  # Prometheus metrics
+  metrics:
+    enabled: true
+    port: 9090
+    path: "/metrics"
+
+  # Health checks
+  health_checks:
+    enabled: true
+    path: "/health"
+    interval: 30  # Seconds
+
+  # Distributed tracing
+  tracing:
+    enabled: false  # Set to true for production
+    provider: "jaeger"  # Options: jaeger, zipkin
+    endpoint: "http://localhost:14268/api/traces"

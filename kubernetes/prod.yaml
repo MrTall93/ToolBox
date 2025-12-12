@@ -1,0 +1,74 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+metadata:
+  name: tool-registry-prod
+  annotations:
+    description: "Production overrides for Tool Registry MCP Server"
+
+# Production-specific overrides
+patchesStrategicMerge:
+- deployment-prod.yaml
+- postgres-prod.yaml
+
+# Production-specific ConfigMap overrides
+configMapGenerator:
+- name: tool-registry-config-prod
+  literals:
+  - LOG_LEVEL=INFO
+  - WORKERS=8
+  - DB_POOL_SIZE=10
+  - DB_MAX_OVERFLOW=20
+  - EMBEDDING_CACHE_SIZE=5000
+  - ENABLE_CACHE=true
+  - CACHE_TTL=600
+
+# Production secrets (referenced by name, not generated)
+secretGenerator:
+- name: tool-registry-prod-secrets
+  literals:
+  - ENVIRONMENT=production
+  - DATABASE_POOL_SIZE=10
+  - MAX_CONNECTIONS=20
+
+# Replica overrides for production
+replicas:
+- name: tool-registry
+  count: 5
+
+# Resource overrides for production
+patches:
+- patch: |
+    apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: tool-registry
+    spec:
+      template:
+        spec:
+          containers:
+          - name: tool-registry
+            resources:
+              requests:
+                memory: "1Gi"
+                cpu: "500m"
+              limits:
+                memory: "2Gi"
+                cpu: "2000m"
+  target:
+    kind: Deployment
+    name: tool-registry
+- patch: |
+    apiVersion: autoscaling/v2
+    kind: HorizontalPodAutoscaler
+    metadata:
+      name: tool-registry-hpa
+    spec:
+      minReplicas: 3
+      maxReplicas: 50
+  target:
+    kind: HorizontalPodAutoscaler
+    name: tool-registry-hpa
+
+# Namespace override
+namespace: tool-registry-prod

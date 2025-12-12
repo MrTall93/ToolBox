@@ -1,0 +1,46 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "tool-registry.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ include "tool-registry.name" . }}
+    component: config
+    {{- include "tool-registry.labels" . | nindent 4 }}
+data:
+  # Application Configuration
+  APP_NAME: {{ .Values.config.app.name | quote }}
+  APP_VERSION: {{ .Values.config.app.version | quote }}
+  LOG_LEVEL: {{ .Values.config.app.logLevel | quote }}
+  WORKERS: {{ .Values.config.app.workers | quote }}
+
+  # Database Connection Pool
+  DB_POOL_SIZE: {{ .Values.config.database.poolSize | quote }}
+  DB_MAX_OVERFLOW: {{ .Values.config.database.maxOverflow | quote }}
+  DB_POOL_TIMEOUT: {{ .Values.config.database.timeout | quote }}
+
+  # Search Configuration
+  DEFAULT_SIMILARITY_THRESHOLD: {{ .Values.config.search.similarityThreshold | quote }}
+  DEFAULT_SEARCH_LIMIT: {{ .Values.config.search.searchLimit | quote }}
+  USE_HYBRID_SEARCH: {{ .Values.config.search.hybridSearch | quote }}
+
+  # Embedding Configuration
+  EMBEDDING_DIMENSION: {{ .Values.config.embedding.dimension | quote }}
+  ENABLE_EMBEDDING_CACHE: {{ .Values.config.embedding.enableCache | quote }}
+  EMBEDDING_CACHE_SIZE: {{ .Values.config.embedding.cacheSize | quote }}
+  EMBEDDING_MAX_RETRIES: {{ .Values.config.embedding.maxRetries | quote }}
+  EMBEDDING_BASE_DELAY: {{ .Values.config.embedding.baseDelay | quote }}
+  EMBEDDING_MAX_BATCH_SIZE: {{ .Values.config.embedding.maxBatchSize | quote }}
+  EMBEDDING_TIMEOUT: {{ .Values.config.embedding.timeout | quote }}
+
+  # Performance
+  ENABLE_CACHE: {{ .Values.config.performance.enableCache | quote }}
+  CACHE_TTL: {{ .Values.config.performance.cacheTTL | quote }}
+
+  # CORS Settings
+  CORS_ORIGINS: {{ .Values.config.cors.origins | quote }}
+
+  # Rate Limiting
+  ENABLE_RATE_LIMIT: {{ .Values.config.rateLimit.enabled | quote }}
+  RATE_LIMIT_REQUESTS_PER_MINUTE: {{ .Values.config.rateLimit.requestsPerMinute | quote }}
+  RATE_LIMIT_BURST_SIZE: {{ .Values.config.rateLimit.burstSize | quote }}

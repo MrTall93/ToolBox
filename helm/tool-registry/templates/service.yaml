@@ -1,0 +1,54 @@
+{{- if .Values.service.enabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "tool-registry.fullname" . }}-service
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ include "tool-registry.name" . }}
+    component: service
+    {{- include "tool-registry.labels" . | nindent 4 }}
+  {{- with .Values.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.type }}
+  ports:
+  - port: {{ .Values.service.port }}
+    targetPort: http
+    protocol: TCP
+    name: http
+  selector:
+    app: {{ include "tool-registry.name" . }}
+    component: api
+    {{- include "tool-registry.selectorLabels" . | nindent 4 }}
+{{- end }}
+
+---
+{{- if .Values.service.external.enabled -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "tool-registry.fullname" . }}-service-external
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ include "tool-registry.name" . }}
+    component: service-external
+    {{- include "tool-registry.labels" . | nindent 4 }}
+  {{- with .Values.service.external.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.service.external.type | default "LoadBalancer" }}
+  ports:
+  - port: {{ .Values.service.external.port | default 80 }}
+    targetPort: http
+    protocol: TCP
+    name: http
+  selector:
+    app: {{ include "tool-registry.name" . }}
+    component: api
+    {{- include "tool-registry.selectorLabels" . | nindent 4 }}
+{{- end }}

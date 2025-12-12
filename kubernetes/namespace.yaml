@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: tool-registry
+  labels:
+    name: tool-registry
+    environment: production
+    app: tool-registry-mcp
+  annotations:
+    description: "Tool Registry MCP Server namespace"
