@@ -2,9 +2,8 @@
 
 import asyncio
 import logging
+import os
 import signal
-import sys
-from typing import Optional
 
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,6 +15,17 @@ from app.db.session import get_db, close_db
 from app.api import mcp, admin
 from app.registry import VectorStore, get_embedding_client
 from app.schemas.mcp import HealthCheckResponse
+# FastMCP server is run separately on port 8080 for MCP Inspector compatibility
+# from app.mcp_fastmcp_server import mcp as fastmcp_server
+
+# Initialize OpenTelemetry if enabled
+if settings.OTEL_ENABLED:
+    from app.observability import init_telemetry
+    init_telemetry(
+        service_name=settings.OTEL_SERVICE_NAME,
+        service_version=settings.OTEL_SERVICE_VERSION,
+        environment=os.getenv("ENVIRONMENT", "development")
+    )
 
 # Setup logging
 logging.basicConfig(
@@ -59,6 +69,9 @@ app.add_middleware(
 # Include routers
 app.include_router(mcp.router)
 app.include_router(admin.router)
+
+# Note: FastMCP server runs separately on port 8080 for MCP Inspector
+# Use http://localhost:8080/mcp for MCP clients
 
 
 @app.get("/")
@@ -147,6 +160,23 @@ async def startup_event():
     except Exception as e:
         logger.error(f"❌ Database connection failed: {e}")
         raise
+
+    # Auto-sync MCP servers on startup
+    if settings.MCP_AUTO_SYNC_ON_STARTUP and settings.MCP_SERVERS:
+        logger.info(f"🔄 Auto-syncing {len(settings.MCP_SERVERS)} MCP servers...")
+        try:
+            from app.services.mcp_discovery import get_mcp_discovery_service
+            discovery_service = get_mcp_discovery_service()
+
+            async for db in get_db():
+                results = await discovery_service.sync_all_servers(session=db)
+                logger.info(
+                    f"✅ MCP sync complete: {results['successful_syncs']}/{results['total_servers']} servers, "
+                    f"{results['total_tools_created']} created, {results['total_tools_updated']} updated"
+                )
+                break
+        except Exception as e:
+            logger.warning(f"⚠️ MCP auto-sync failed (non-fatal): {e}")
 
 
 # Shutdown event

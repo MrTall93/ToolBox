@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: toolbox-config
+  namespace: toolbox
+data:
+  DATABASE_URL: "postgresql+asyncpg://toolregistry:devpassword@postgres:5432/toolregistry"
+  EMBEDDING_ENDPOINT_URL: "http://host.docker.internal:1234/v1/embeddings"
+  EMBEDDING_API_KEY: "dummy-key"
+  EMBEDDING_DIMENSION: "768"
+  LOG_LEVEL: "DEBUG"
+  CORS_ORIGINS: "http://localhost:30800,http://localhost:30400"
+  SECRET_KEY: "test-secret-key-for-development-only"
+  # OpenTelemetry Configuration
+  OTEL_EXPORTER_OTLP_ENDPOINT: "http://localhost:4317"
+  OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: "http://localhost:4317"
+  OTEL_SERVICE_NAME: "toolbox"
+  OTEL_SERVICE_VERSION: "1.0.0"
+  OTEL_LOG_LEVEL: "info"
+  # MCP Server Configuration (JSON array) - Empty by default, servers added via LiteLLM
+  MCP_SERVERS: '[]'
+  MCP_AUTO_SYNC_ON_STARTUP: "true"
+  MCP_REQUEST_TIMEOUT: "30.0"
+  # LiteLLM Integration
+  LITELLM_SYNC_ENABLED: "true"
+  LITELLM_MCP_SERVER_URL: "http://litellm:4000"
+  LITELLM_MCP_API_KEY: "sk-12345"

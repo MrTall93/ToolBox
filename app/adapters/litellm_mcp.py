@@ -377,10 +377,10 @@ def get_litellm_mcp_adapter() -> LiteLLMMCPAdapter:
 
     if _adapter is None:
         # Configuration from environment variables
-        mcp_server_url = getattr(settings, 'LITELM_MCP_SERVER_URL', 'http://localhost:8000')
-        api_key = getattr(settings, 'LITELM_MCP_API_KEY', None)
-        timeout = getattr(settings, 'LITELM_MCP_TIMEOUT', 30)
-        max_retries = getattr(settings, 'LITELM_MCP_MAX_RETRIES', 3)
+        mcp_server_url = getattr(settings, 'LITELLM_MCP_SERVER_URL', 'http://localhost:8000')
+        api_key = getattr(settings, 'LITELLM_MCP_API_KEY', None)
+        timeout = getattr(settings, 'LITELLM_MCP_TIMEOUT', 30)
+        max_retries = getattr(settings, 'LITELLM_MCP_MAX_RETRIES', 3)
 
         _adapter = LiteLLMMCPAdapter(
             mcp_server_url=mcp_server_url,

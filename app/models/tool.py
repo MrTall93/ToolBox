@@ -1,6 +1,7 @@
 """
 SQLAlchemy model for Tool with pgvector support.
 """
+import enum
 from datetime import datetime, timezone
 from typing import Optional, List
 from sqlalchemy import String, Text, DateTime, JSON, Index, Boolean
@@ -8,6 +9,18 @@ from sqlalchemy.orm import Mapped, mapped_column
 from pgvector.sqlalchemy import Vector
 from app.db.session import Base
 from app.config import settings
+
+
+class ImplementationType(str, enum.Enum):
+    """Supported tool implementation types."""
+
+    PYTHON_CODE = "python_code"
+    PYTHON_FUNCTION = "python_function"
+    HTTP_ENDPOINT = "http_endpoint"
+    COMMAND_LINE = "command_line"
+    WEBHOOK = "webhook"
+    MCP_SERVER = "mcp_server"  # For tools from external MCP servers
+    LITELLM = "litellm"  # For tools from LiteLLM gateway
 
 
 class Tool(Base):
@@ -62,12 +75,12 @@ class Tool(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False, index=True)
     version: Mapped[str] = mapped_column(String(50), default="1.0.0", nullable=False)
 
-    # Timestamps
+    # Timestamps (timezone-aware)
     created_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc), nullable=False
     )
 
     # Additional metadata

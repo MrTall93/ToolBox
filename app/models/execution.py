@@ -4,7 +4,7 @@ SQLAlchemy model for ToolExecution tracking.
 from datetime import datetime, timezone
 from typing import Optional
 from sqlalchemy import String, Text, DateTime, JSON, Integer, ForeignKey, Index, Enum as SQLEnum
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column
 import enum
 from app.db.session import Base
 
@@ -67,15 +67,14 @@ class ToolExecution(Base):
     # Performance metrics
     execution_time_ms: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
 
-    # Timestamps
-    started_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), nullable=False)
-    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # Timestamps (timezone-aware)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
     # Additional metadata
     metadata_: Mapped[Optional[dict]] = mapped_column("metadata", JSON, nullable=True)
 
     # Relationship to Tool (optional, for joins)
-    # tool: Mapped["Tool"] = relationship("Tool", backref="executions")
 
     # Indexes for performance
     __table_args__ = (
@@ -88,7 +87,8 @@ class ToolExecution(Base):
     )
 
     def __repr__(self) -> str:
-        return f"<ToolExecution(id={self.id}, tool_name='{self.tool_name}', status='{self.status.value}')>"
+        status_val = self.status.value if hasattr(self.status, 'value') else self.status
+        return f"<ToolExecution(id={self.id}, tool_name='{self.tool_name}', status='{status_val}')>"
 
     def to_dict(self) -> dict:
         """Convert model to dictionary for API responses."""

@@ -1,0 +1,153 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: toolbox
+  namespace: toolbox
+  labels:
+    app: toolbox
+    app.kubernetes.io/name: toolbox
+    app.kubernetes.io/component: service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: toolbox
+  template:
+    metadata:
+      labels:
+        app: toolbox
+        app.kubernetes.io/name: toolbox
+        app.kubernetes.io/component: service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8888"
+        prometheus.io/path: "/metrics"
+    spec:
+      initContainers:
+      - name: migrations
+        image: toolbox:otel
+        command: ["python3", "-m", "alembic", "upgrade", "head"]
+        env:
+        - name: DATABASE_URL
+          value: "postgresql+asyncpg://toolregistry:devpassword@postgres:5432/toolregistry"
+        - name: EMBEDDING_ENDPOINT_URL
+          valueFrom:
+            configMapKeyRef:
+              name: toolbox-config
+              key: EMBEDDING_ENDPOINT_URL
+        - name: EMBEDDING_API_KEY
+          valueFrom:
+            configMapKeyRef:
+              name: toolbox-config
+              key: EMBEDDING_API_KEY
+        - name: EMBEDDING_DIMENSION
+          valueFrom:
+            configMapKeyRef:
+              name: toolbox-config
+              key: EMBEDDING_DIMENSION
+        - name: LOG_LEVEL
+          value: "DEBUG"
+        - name: CORS_ORIGINS
+          value: '["http://localhost:30800","http://localhost:30400"]'
+        - name: SECRET_KEY
+          value: "test-secret-key-for-development-only"
+        - name: PYTHONPATH
+          value: "/app"
+      containers:
+      - name: toolbox
+        image: toolbox:otel
+        ports:
+        - containerPort: 8000
+          name: http
+        - containerPort: 8888
+          name: metrics
+        - containerPort: 4317
+          name: otlp-grpc
+        - containerPort: 4318
+          name: otlp-http
+        - containerPort: 13133
+          name: otel-health
+        env:
+        - name: DATABASE_URL
+          value: "postgresql+asyncpg://toolregistry:devpassword@postgres:5432/toolregistry"
+        - name: EMBEDDING_ENDPOINT_URL
+          valueFrom:
+            configMapKeyRef:
+              name: toolbox-config
+              key: EMBEDDING_ENDPOINT_URL
+        - name: EMBEDDING_API_KEY
+          valueFrom:
+            configMapKeyRef:
+              name: toolbox-config
+              key: EMBEDDING_API_KEY
+        - name: EMBEDDING_DIMENSION
+          valueFrom:
+            configMapKeyRef:
+              name: toolbox-config
+              key: EMBEDDING_DIMENSION
+        - name: LOG_LEVEL
+          value: "DEBUG"
+        - name: CORS_ORIGINS
+          value: '["http://localhost:30800","http://localhost:30400"]'
+        - name: SECRET_KEY
+          value: "test-secret-key-for-development-only"
+        - name: PYTHONPATH
+          value: "/app"
+        # OpenTelemetry Configuration
+        - name: OTEL_ENABLED
+          value: "true"
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: toolbox-config
+              key: OTEL_EXPORTER_OTLP_ENDPOINT
+        - name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: toolbox-config
+              key: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+        - name: OTEL_SERVICE_NAME
+          value: "toolbox"
+        - name: OTEL_SERVICE_VERSION
+          value: "1.0.0"
+        - name: OTEL_RESOURCE_ATTRIBUTES
+          value: "service.name=toolbox,service.namespace=tool-registry"
+        - name: ENVIRONMENT
+          value: "development"
+        # MCP Server Configuration
+        - name: MCP_SERVERS
+          valueFrom:
+            configMapKeyRef:
+              name: toolbox-config
+              key: MCP_SERVERS
+        - name: MCP_AUTO_SYNC_ON_STARTUP
+          valueFrom:
+            configMapKeyRef:
+              name: toolbox-config
+              key: MCP_AUTO_SYNC_ON_STARTUP
+        - name: MCP_REQUEST_TIMEOUT
+          valueFrom:
+            configMapKeyRef:
+              name: toolbox-config
+              key: MCP_REQUEST_TIMEOUT
+        # Use the start script that handles OTel collector
+        command: ["/app/scripts/start-with-otel.sh"]
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        resources:
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+          requests:
+            memory: "512Mi"
+            cpu: "500m"

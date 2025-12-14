@@ -6,13 +6,22 @@ Implements the three core MCP endpoints:
 - POST /mcp/find_tool - Semantic search for tools
 - POST /mcp/call_tool - Execute a tool
 """
-from typing import Dict, Any
+from typing import Dict
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from datetime import datetime
 import time
 
 from app.db.session import get_db
+from app.config import settings
+
+# OpenTelemetry imports (optional, only if enabled)
+if settings.OTEL_ENABLED:
+    from app.observability import (
+        create_span,
+        record_search_metrics,
+        add_span_attributes,
+        add_span_event
+    )
 from app.registry import ToolRegistry
 from app.execution.executor import executor
 from app.schemas.mcp import (
@@ -24,7 +33,6 @@ from app.schemas.mcp import (
     CallToolResponse,
     ToolSchema,
     ToolWithScore,
-    ErrorResponse,
 )
 from app.models.execution import ExecutionStatus
 
@@ -68,9 +76,7 @@ async def list_tools(
         # Convert to schema
         tool_schemas = [ToolSchema.model_validate(tool) for tool in tools]
 
-        # Get total count (for pagination)
-        # For now, just return the count we got
-        # TODO: Add a proper count query for accurate pagination
+        # Get total count for pagination
         total = len(tool_schemas)
 
         return ListToolsResponse(
@@ -110,7 +116,28 @@ async def find_tool(
 
     Returns tools ranked by relevance with similarity scores.
     """
+    # Create span for search operation
+    span = None
+    if settings.OTEL_ENABLED:
+        span = create_span(
+            name="mcp.find_tool",
+            attributes={
+                "query": request.query,
+                "limit": request.limit,
+                "threshold": request.threshold,
+                "category": request.category or "all",
+                "use_hybrid": request.use_hybrid,
+                "query_length": len(request.query)
+            }
+        )
+
+    start_time = time.time()
+
     try:
+        # Add search start event
+        if settings.OTEL_ENABLED and span:
+            add_span_event("search.started")
+
         # Perform semantic search
         results = await registry.find_tool(
             query=request.query,
@@ -119,6 +146,14 @@ async def find_tool(
             category=request.category,
             use_hybrid=request.use_hybrid,
         )
+
+        # Record search completion event
+        if settings.OTEL_ENABLED and span:
+            add_span_event("search.completed", {
+                "results_found": len(results)
+            })
+
+        search_time = time.time() - start_time
 
         # Convert to schema
         tool_results = [
@@ -129,6 +164,22 @@ async def find_tool(
             for tool, score in results
         ]
 
+        # Record search metrics
+        if settings.OTEL_ENABLED:
+            query_type = "hybrid" if request.use_hybrid else "vector"
+            record_search_metrics(
+                query_type=query_type,
+                results_count=len(results),
+                search_time=search_time,
+                query_length=len(request.query),
+                threshold=request.threshold
+            )
+
+            if span:
+                span.set_attribute("search.time_ms", int(search_time * 1000))
+                span.set_attribute("search.results_count", len(results))
+                span.set_attribute("search.success", True)
+
         return FindToolResponse(
             results=tool_results,
             query=request.query,
@@ -136,10 +187,27 @@ async def find_tool(
         )
 
     except Exception as e:
+        # Record error
+        search_time = time.time() - start_time
+
+        if settings.OTEL_ENABLED and span:
+            span.set_attribute("search.time_ms", int(search_time * 1000))
+            span.set_attribute("search.success", False)
+            span.set_attribute("error.type", type(e).__name__)
+            span.set_attribute("error.message", str(e))
+            add_span_event("search.failed", {
+                "error": str(e),
+                "error_type": type(e).__name__
+            })
+
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to search tools: {str(e)}",
         )
+    finally:
+        # End the span
+        if settings.OTEL_ENABLED and span:
+            span.end()
 
 
 @router.post(

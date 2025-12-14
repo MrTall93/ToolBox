@@ -1,7 +1,8 @@
-# Multi-stage build using Red Hat Universal Base Image 8
+# Multi-stage build using Red Hat Universal Base Image 8 with OpenTelemetry support
+# Using Python 3.11 for FastMCP compatibility (requires Python 3.10+)
 
 # Stage 1: Builder
-FROM registry.access.redhat.com/ubi8/python-39 AS builder
+FROM registry.access.redhat.com/ubi8/python-311 AS builder
 
 USER root
 
@@ -10,19 +11,20 @@ WORKDIR /build
 # Install build dependencies
 RUN dnf install -y --setopt=install_weak_deps=False \
     gcc \
-    python39-devel \
+    python3.11-devel \
     libpq-devel \
+    wget \
     && dnf clean all
 
 # Copy requirements
 COPY requirements.txt .
 
-# Install Python dependencies
-RUN python3.9 -m pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    python3.9 -m pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies (includes OpenTelemetry packages)
+RUN python3.11 -m pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    python3.11 -m pip install --no-cache-dir -r requirements.txt
 
 # Stage 2: Runtime
-FROM registry.access.redhat.com/ubi8/python-39
+FROM registry.access.redhat.com/ubi8/python-311
 
 USER root
 
@@ -30,7 +32,15 @@ USER root
 RUN dnf install -y --setopt=install_weak_deps=False \
     libpq \
     curl \
+    wget \
     && dnf clean all
+
+# Install OpenTelemetry Collector
+RUN mkdir -p /opt/otelcol && \
+    wget -qO /tmp/otelcol.tar.gz https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v0.88.0/otelcol_0.88.0_linux_amd64.tar.gz && \
+    tar -xzf /tmp/otelcol.tar.gz -C /opt/otelcol && \
+    rm /tmp/otelcol.tar.gz && \
+    chmod +x /opt/otelcol/otelcol
 
 # Create app directory
 WORKDIR /app
@@ -40,7 +50,7 @@ RUN groupadd -g 1000 appgroup && \
     useradd -u 1000 -g appgroup -d /app -s /sbin/nologin -c "Default Application User" appuser
 
 # Copy Python packages from builder (UBI8 uses /opt/app-root/)
-COPY --from=builder /opt/app-root/lib/python3.9/site-packages/ /opt/app-root/lib/python3.9/site-packages/
+COPY --from=builder /opt/app-root/lib/python3.11/site-packages/ /opt/app-root/lib/python3.11/site-packages/
 COPY --from=builder /opt/app-root/bin/ /opt/app-root/bin/
 
 # Copy application code
@@ -48,24 +58,35 @@ COPY app/ /app/app/
 COPY alembic.ini /app/
 COPY alembic/ /app/alembic/
 COPY scripts/ /app/scripts/
+COPY otel-collector-config.yaml /etc/otelcol-contrib/
 
 # Create directories and set permissions
 RUN mkdir -p /app/tmp /app/logs && \
     chown -R 1000:0 /app && \
-    chmod -R g+rwX /app
+    chmod -R g+rwX /app && \
+    chown -R 1000:0 /opt/otelcol && \
+    chmod -R g+rwX /opt/otelcol
 
 # Make scripts executable
 RUN chmod +x /app/scripts/*.sh 2>/dev/null || true
+RUN chmod +x /opt/otelcol/otelcol
 
 # Switch to non-root user
 USER 1000
 
-# Expose port
-EXPOSE 8000
+# Expose ports
+EXPOSE 8000 8888 4317 4318 13133
 
 # Set environment variables for non-root user
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
+# OpenTelemetry Configuration
+ENV OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4317
+ENV OTEL_EXPORTER_OTLP_METRICS_ENDPOINT=http://localhost:4317
+ENV OTEL_SERVICE_NAME=toolbox
+ENV OTEL_SERVICE_VERSION=1.0.0
+ENV OTEL_ENABLED=true
+ENV OTEL_RESOURCE_ATTRIBUTES=service.name=toolbox,service.namespace=tool-registry
 
 # Health check using curl (more reliable in UBI8)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
@@ -74,6 +95,8 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
 # Kubernetes readiness probe endpoint will be available at /ready
 # Kubernetes liveness probe endpoint will be available at /live
 
-# Update PATH for UBI8 and run the application
+# Update PATH for UBI8
 ENV PATH="/opt/app-root/bin:$PATH"
-CMD ["python3.9", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+# Start script that runs both the app and OTel collector
+CMD ["/app/scripts/start-with-otel.sh"]

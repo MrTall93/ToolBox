@@ -1,0 +1,37 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: toolbox
+  namespace: toolbox
+  labels:
+    app: toolbox
+spec:
+  selector:
+    app: toolbox
+  ports:
+  - name: http
+    port: 8000
+    targetPort: 8000
+    nodePort: 30800
+    protocol: TCP
+  - name: metrics
+    port: 8888
+    targetPort: 8888
+    nodePort: 30888
+    protocol: TCP
+  - name: otlp-grpc
+    port: 4317
+    targetPort: 4317
+    nodePort: 30417
+    protocol: TCP
+  - name: otlp-http
+    port: 4318
+    targetPort: 4318
+    nodePort: 30418
+    protocol: TCP
+  - name: otel-health
+    port: 13133
+    targetPort: 13133
+    nodePort: 30133
+    protocol: TCP
+  type: NodePort

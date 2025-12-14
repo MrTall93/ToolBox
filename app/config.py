@@ -1,7 +1,8 @@
 """Application configuration using Pydantic Settings."""
 
+import json
 from functools import lru_cache
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -65,6 +66,31 @@ class Settings(BaseSettings):
     ENABLE_CACHE: bool = True
     CACHE_TTL: int = 300  # seconds
 
+    # MCP Server Discovery Settings
+    MCP_SERVERS: List[Dict[str, Any]] = Field(
+        default=[],
+        description="List of MCP servers to sync tools from"
+    )
+    MCP_AUTO_SYNC_ON_STARTUP: bool = True
+    MCP_SYNC_INTERVAL_SECONDS: int = 300  # 5 minutes
+    MCP_REQUEST_TIMEOUT: float = 30.0
+
+    # LiteLLM Integration Settings
+    LITELLM_SYNC_ENABLED: bool = True
+    LITELLM_MCP_SERVER_URL: str = "http://litellm:4000"
+    LITELLM_MCP_API_KEY: Optional[str] = None
+    LITELLM_MCP_TIMEOUT: int = 30
+    LITELLM_MCP_MAX_RETRIES: int = 3
+
+    # OpenTelemetry Configuration
+    OTEL_EXPORTER_OTLP_ENDPOINT: Optional[str] = None
+    OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: Optional[str] = None
+    OTEL_SERVICE_NAME: str = "toolbox"
+    OTEL_SERVICE_VERSION: str = "1.0.0"
+    OTEL_HONEYCOMB_TEAM: Optional[str] = None
+    OTEL_RESOURCE_ATTRIBUTES: str = ""  # Comma-separated key=value pairs
+    OTEL_ENABLED: bool = True
+
     @field_validator("CORS_ORIGINS")
     @classmethod
     def parse_cors_origins(cls, v) -> List[str]:
@@ -94,6 +120,22 @@ class Settings(BaseSettings):
         if not 0 <= v <= 1:
             raise ValueError("DEFAULT_SIMILARITY_THRESHOLD must be between 0 and 1")
         return v
+
+    @field_validator("MCP_SERVERS", mode="before")
+    @classmethod
+    def parse_mcp_servers(cls, v) -> List[Dict[str, Any]]:
+        """Parse MCP servers from JSON string or list."""
+        if isinstance(v, str):
+            if not v.strip():
+                return []
+            try:
+                parsed = json.loads(v)
+                return parsed if isinstance(parsed, list) else []
+            except json.JSONDecodeError:
+                return []
+        if isinstance(v, list):
+            return v
+        return []
 
 
 @lru_cache()

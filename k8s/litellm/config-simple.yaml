@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: litellm-config
+  namespace: toolbox
+data:
+  config.yaml: |
+    model_list:
+      - model_name: "test-model"
+        litellm_params:
+          model: "test-model"
+          api_base: "http://localhost:8080"  # Dummy base URL
+
+    litellm_settings:
+      drop_params: true
+      set_verbose: true
+
+    general_settings:
+      master_key: "sk-test-key"

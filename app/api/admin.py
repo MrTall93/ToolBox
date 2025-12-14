@@ -8,9 +8,13 @@ Provides CRUD operations for tools:
 - DELETE /admin/tools/{tool_id} - Delete a tool
 - GET /admin/tools/{tool_id}/stats - Get tool statistics
 - POST /admin/tools/{tool_id}/reindex - Regenerate embedding
+- POST /admin/mcp/sync - Sync tools from MCP servers
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Path
+from typing import Any, Dict, List, Optional
+from fastapi import APIRouter, Depends, HTTPException, status, Path, Body
+from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
+import time
 
 from app.db.session import get_db
 from app.middleware.auth import require_auth
@@ -23,6 +27,18 @@ from app.schemas.mcp import (
     ToolSchema,
     ToolStatsResponse,
 )
+from app.services.mcp_discovery import get_mcp_discovery_service, MCPServerConfig
+
+# Import OpenTelemetry functions if enabled
+from app.config import settings
+if settings.OTEL_ENABLED:
+    from app.observability import (
+        record_registry_operation,
+        update_registry_tools_count,
+        create_span,
+        add_span_event,
+        record_litellm_sync_operation
+    )
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -49,6 +65,25 @@ async def register_tool(
 
     Automatically generates embeddings for semantic search unless auto_embed=False.
     """
+    # Create span for operation if OpenTelemetry is enabled
+    span = None
+    if settings.OTEL_ENABLED:
+        span = create_span(
+            name="admin.register_tool",
+            attributes={
+                "tool.name": request.name,
+                "tool.category": request.category or "unknown",
+                "tool.auto_embed": str(request.auto_embed),
+            }
+        )
+        add_span_event("tool_registration_started", {
+            "tool_name": request.name,
+            "category": request.category
+        })
+
+    start_time = time.time()
+    success = False
+
     try:
         tool = await registry.register_tool(
             name=request.name,
@@ -64,6 +99,16 @@ async def register_tool(
             auto_embed=request.auto_embed,
         )
 
+        success = True
+
+        # Record metrics
+        if settings.OTEL_ENABLED:
+            record_registry_operation("register", success=True)
+            add_span_event("tool_registered", {
+                "tool_id": tool.id,
+                "tool_name": tool.name
+            })
+
         return RegisterToolResponse(
             success=True,
             tool=ToolSchema.model_validate(tool),
@@ -71,15 +116,32 @@ async def register_tool(
         )
 
     except ValueError as e:
+        if settings.OTEL_ENABLED:
+            record_registry_operation("register", success=False)
+            add_span_event("tool_registration_failed", {
+                "error": str(e),
+                "error_type": "ValidationError"
+            })
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
     except Exception as e:
+        if settings.OTEL_ENABLED:
+            record_registry_operation("register", success=False)
+            add_span_event("tool_registration_failed", {
+                "error": str(e),
+                "error_type": "InternalServerError"
+            })
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to register tool: {str(e)}",
         )
+    finally:
+        if span:
+            span.set_attribute("operation.duration", time.time() - start_time)
+            span.set_attribute("operation.success", str(success))
+            span.end()
 
 
 @router.get(
@@ -310,3 +372,194 @@ async def reindex_tool(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to reindex tool: {str(e)}",
         )
+
+
+# ============================================================================
+# MCP Server Sync Endpoints
+# ============================================================================
+
+
+class MCPSyncRequest(BaseModel):
+    """Request model for MCP sync."""
+    servers: Optional[List[Dict[str, Any]]] = None  # Override configured servers
+
+
+class MCPSyncResponse(BaseModel):
+    """Response model for MCP sync."""
+    success: bool
+    total_servers: int
+    successful_syncs: int
+    failed_syncs: int
+    total_tools_created: int
+    total_tools_updated: int
+    total_tools_skipped: int
+    servers: Dict[str, Any]
+
+
+@router.post(
+    "/mcp/sync",
+    response_model=MCPSyncResponse,
+    summary="Sync tools from MCP servers",
+    description="Discover and sync tools from configured MCP servers into the Toolbox registry.",
+)
+async def sync_mcp_servers(
+    request: MCPSyncRequest = Body(default=MCPSyncRequest()),
+    db: AsyncSession = Depends(get_db),
+    api_key: str = Depends(require_auth),
+) -> MCPSyncResponse:
+    """
+    Sync tools from MCP servers.
+
+    This endpoint:
+    1. Connects to each configured MCP server
+    2. Discovers available tools
+    3. Registers or updates tools in the Toolbox registry
+    4. Generates embeddings for semantic search
+
+    You can optionally provide a list of servers to sync instead of using
+    the configured servers from settings.
+    """
+    try:
+        discovery_service = get_mcp_discovery_service()
+        results = await discovery_service.sync_all_servers(
+            session=db,
+            server_configs=request.servers
+        )
+
+        return MCPSyncResponse(
+            success=results["failed_syncs"] == 0,
+            total_servers=results["total_servers"],
+            successful_syncs=results["successful_syncs"],
+            failed_syncs=results["failed_syncs"],
+            total_tools_created=results["total_tools_created"],
+            total_tools_updated=results["total_tools_updated"],
+            total_tools_skipped=results["total_tools_skipped"],
+            servers=results["servers"]
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to sync MCP servers: {str(e)}",
+        )
+
+
+@router.post(
+    "/mcp/sync/server",
+    response_model=MCPSyncResponse,
+    summary="Sync tools from a single MCP server",
+    description="Discover and sync tools from a specific MCP server.",
+)
+async def sync_single_mcp_server(
+    server: MCPServerConfig = Body(...),
+    db: AsyncSession = Depends(get_db),
+    api_key: str = Depends(require_auth),
+) -> MCPSyncResponse:
+    """
+    Sync tools from a single MCP server.
+
+    Provide the server configuration directly in the request body.
+    """
+    try:
+        discovery_service = get_mcp_discovery_service()
+        results = await discovery_service.sync_all_servers(
+            session=db,
+            server_configs=[server.model_dump()]
+        )
+
+        return MCPSyncResponse(
+            success=results["failed_syncs"] == 0,
+            total_servers=results["total_servers"],
+            successful_syncs=results["successful_syncs"],
+            failed_syncs=results["failed_syncs"],
+            total_tools_created=results["total_tools_created"],
+            total_tools_updated=results["total_tools_updated"],
+            total_tools_skipped=results["total_tools_skipped"],
+            servers=results["servers"]
+        )
+
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to sync MCP server: {str(e)}",
+        )
+
+
+@router.post(
+    "/mcp/sync-from-liteLLM",
+    summary="Sync tools from LiteLLM",
+    description="Sync all tools from LiteLLM gateway to Toolbox.",
+)
+async def sync_from_liteLLM(
+    db: AsyncSession = Depends(get_db),
+    api_key: str = Depends(require_auth),
+) -> Dict[str, Any]:
+    """
+    Sync tools from LiteLLM gateway.
+
+    This endpoint:
+    1. Connects to LiteLLM's MCP endpoint
+    2. Retrieves all registered tools
+    3. Creates or updates tools in Toolbox
+    """
+    # Create span for operation if OpenTelemetry is enabled
+    span = None
+    if settings.OTEL_ENABLED:
+        span = create_span(
+            name="admin.sync_from_liteLLM",
+            attributes={
+                "sync.source": "litellm",
+                "sync.direction": "inbound"
+            }
+        )
+        add_span_event("liteLLM_sync_started")
+
+    start_time = time.time()
+    success = False
+
+    try:
+        from app.services.mcp_discovery import get_mcp_discovery_service
+
+        discovery_service = get_mcp_discovery_service()
+        results = await discovery_service.sync_from_liteLLM(session=db)
+
+        success = True
+        total_tools = results.get("total_tools_created", 0) + results.get("total_tools_updated", 0)
+
+        # Record sync metrics
+        if settings.OTEL_ENABLED:
+            record_litellm_sync_operation(
+                server="litellm",
+                tools_count=total_tools,
+                duration=time.time() - start_time,
+                success=True
+            )
+            add_span_event("liteLLM_sync_completed", {
+                "tools_created": results.get("total_tools_created", 0),
+                "tools_updated": results.get("total_tools_updated", 0),
+                "tools_failed": results.get("total_tools_failed", 0)
+            })
+
+        return results
+
+    except Exception as e:
+        if settings.OTEL_ENABLED:
+            record_litellm_sync_operation(
+                server="litellm",
+                tools_count=0,
+                duration=time.time() - start_time,
+                success=False
+            )
+            add_span_event("liteLLM_sync_failed", {
+                "error": str(e),
+                "error_type": type(e).__name__
+            })
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to sync from LiteLLM: {str(e)}",
+        )
+    finally:
+        if span:
+            span.set_attribute("operation.duration", time.time() - start_time)
+            span.set_attribute("operation.success", str(success))
+            span.end()

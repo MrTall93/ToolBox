@@ -18,3 +18,18 @@ backoff>=2.2.1
 
 # Optional: Production server (alternative to uvicorn)
 gunicorn>=21.2.0
+
+# OpenTelemetry observability
+opentelemetry-api>=1.21.0,<2.0.0
+opentelemetry-sdk>=1.21.0,<2.0.0
+opentelemetry-instrumentation-fastapi>=0.42b0,<1.0.0
+opentelemetry-instrumentation-httpx>=0.42b0,<1.0.0
+opentelemetry-instrumentation-sqlalchemy>=0.42b0,<1.0.0
+opentelemetry-instrumentation-asyncpg>=0.42b0,<1.0.0
+opentelemetry-exporter-otlp>=1.21.0,<2.0.0
+opentelemetry-exporter-otlp-proto-grpc>=1.21.0,<2.0.0
+opentelemetry-propagator-b3>=1.21.0,<2.0.0
+opentelemetry-propagator-jaeger>=1.21.0,<2.0.0
+
+# FastMCP for MCP server implementation
+fastmcp>=2.0.0

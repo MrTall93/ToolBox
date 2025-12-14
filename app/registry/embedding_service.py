@@ -21,6 +21,14 @@ from app.registry.embedding_client import EmbeddingClient, get_embedding_client
 # Setup logging
 logger = logging.getLogger(__name__)
 
+# OpenTelemetry imports (optional, only if enabled)
+if settings.OTEL_ENABLED:
+    from app.observability import (
+        record_embedding_cache_hit,
+        record_embedding_cache_miss,
+        update_embedding_cache_size
+    )
+
 # Cache configuration
 _EMBEDDING_CACHE: Optional[LRUCache] = None
 _CACHE_STATS = {
@@ -43,8 +51,8 @@ def get_embedding_cache() -> LRUCache:
 
 
 def get_cache_key(text: str) -> str:
-    """Generate cache key for text."""
-    return hashlib.md5(text.encode()).hexdigest()
+    """Generate cache key for text using SHA256."""
+    return hashlib.sha256(text.encode()).hexdigest()
 
 
 def _log_cache_stats(func):
@@ -199,6 +207,8 @@ class EmbeddingService:
                 cached_result = self.cache.get(cache_key)
                 if cached_result is not None:
                     _CACHE_STATS["hits"] += 1
+                    if settings.OTEL_ENABLED:
+                        record_embedding_cache_hit()
                     logger.debug(f"Cache hit for text: {text[:50]}...")
                     self._record_success()
                     return cached_result
@@ -206,6 +216,8 @@ class EmbeddingService:
                 logger.warning(f"Cache error: {e}")
 
         _CACHE_STATS["misses"] += 1
+        if settings.OTEL_ENABLED:
+            record_embedding_cache_miss()
         logger.debug(f"Cache miss for text: {text[:50]}...")
 
         try:
@@ -279,10 +291,14 @@ class EmbeddingService:
                         if cached_result is not None:
                             cached_embeddings[j] = cached_result
                             _CACHE_STATS["hits"] += 1
+                            if settings.OTEL_ENABLED:
+                                record_embedding_cache_hit()
                         else:
                             uncached_texts.append(text)
                             uncached_indices.append(j)
                             _CACHE_STATS["misses"] += 1
+                            if settings.OTEL_ENABLED:
+                                record_embedding_cache_miss()
                     except Exception as e:
                         logger.warning(f"Cache error: {e}")
                         uncached_texts.append(text)

@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-config
+  namespace: toolbox
+data:
+  postgres-db: toolregistry
+  postgres-user: toolregistry
+  postgres-password: devpassword

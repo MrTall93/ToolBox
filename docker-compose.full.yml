@@ -1,0 +1,128 @@
+version: '3.8'
+
+services:
+  # PostgreSQL with pgvector extension for Toolbox
+  postgres:
+    image: ankane/pgvector:latest
+    container_name: toolbox-postgres
+    environment:
+      POSTGRES_USER: toolregistry
+      POSTGRES_PASSWORD: devpassword
+      POSTGRES_DB: toolregistry
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U toolregistry"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - tool-network
+
+  # PostgreSQL for LiteLLM (separate database)
+  litellm-postgres:
+    image: postgres:15
+    container_name: litellm-postgres
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+    ports:
+      - "5433:5432"
+    volumes:
+      - litellm_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - tool-network
+
+  # Redis for LiteLLM caching
+  redis:
+    image: redis:7-alpine
+    container_name: litellm-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - tool-network
+
+  # Toolbox Application
+  toolbox:
+    build:
+      context: .
+      dockerfile: Dockerfile.ubi8
+    container_name: toolbox-api
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://toolregistry:devpassword@postgres:5432/toolregistry
+      EMBEDDING_ENDPOINT_URL: http://host.docker.internal:1234/v1/embeddings
+      EMBEDDING_API_KEY: "dummy-key"
+      EMBEDDING_DIMENSION: 768  # nomic-embed-text-v1.5 dimension
+      LOG_LEVEL: DEBUG
+      CORS_ORIGINS: "*"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./mcp-servers:/app/mcp-servers:ro
+    command: >
+      bash -c "
+        echo 'Running migrations...' &&
+        cd /app &&
+        alembic upgrade head &&
+        echo 'Starting API server...' &&
+        uvicorn app.main:app --host 0.0.0.0 --port 8000
+      "
+    networks:
+      - tool-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # LiteLLM Gateway with MCP support
+  litellm:
+    image: ghcr.io/berriai/litellm:main-latest
+    container_name: litellm-gateway
+    ports:
+      - "4000:4000"
+    environment:
+      - CONFIG_PATH=/app/config.yaml
+      - DATABASE_URL=postgresql://postgres:password@litellm-postgres:5432/litellm
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - LITELM_LOG=DEBUG
+    volumes:
+      - ./litellm-config.yaml:/app/config.yaml:ro
+      - ./mcp-servers:/app/mcp-servers:ro
+    depends_on:
+      - toolbox
+      - litellm-postgres
+      - redis
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--detailed_debug"]
+    networks:
+      - tool-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  pgdata:
+    driver: local
+  litellm_pgdata:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  tool-network:
+    driver: bridge

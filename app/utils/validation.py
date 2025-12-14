@@ -1,12 +1,11 @@
 """Enhanced input validation and error handling utilities."""
 
-import json
 import math
 import re
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List
 
 import jsonschema
-from pydantic import ValidationError
+from pydantic import ValidationError as PydanticValidationError
 
 from app.config import settings
 
@@ -54,10 +53,11 @@ def validate_tool_name(name: str) -> str:
     if len(name) > 255:
         raise ValidationError("Tool name cannot exceed 255 characters")
 
-    # Only allow alphanumeric characters, spaces, hyphens, and underscores
-    if not re.match(r'^[a-zA-Z0-9\s\-_]+$', name):
+    # Allow alphanumeric characters, spaces, hyphens, underscores, and colons
+    # (colons are used for namespaced tools like "mcp_server:tool_name")
+    if not re.match(r'^[a-zA-Z0-9\s\-_:]+$', name):
         raise ValidationError(
-            "Tool name can only contain letters, numbers, spaces, hyphens, and underscores"
+            "Tool name can only contain letters, numbers, spaces, hyphens, underscores, and colons"
         )
 
     return name

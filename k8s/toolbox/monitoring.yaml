@@ -1,0 +1,126 @@
+# Prometheus monitoring configuration for Toolbox with OpenTelemetry metrics
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: toolbox-metrics
+  namespace: toolbox
+  labels:
+    app: toolbox
+    app.kubernetes.io/name: toolbox
+    app.kubernetes.io/component: metrics
+spec:
+  selector:
+    app: toolbox
+  ports:
+  - name: metrics
+    port: 8888
+    targetPort: 8888
+    protocol: TCP
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: toolbox-metrics
+  namespace: toolbox
+  labels:
+    app: toolbox
+    app.kubernetes.io/name: toolbox
+    app.kubernetes.io/component: metrics
+spec:
+  selector:
+    matchLabels:
+      app: toolbox
+      app.kubernetes.io/name: toolbox
+      app.kubernetes.io/component: metrics
+  endpoints:
+  - port: metrics
+    interval: 30s
+    path: /metrics
+    honorLabels: true
+
+---
+# OpenTelemetry Collector as a sidecar for exporting metrics to external systems
+apiVersion: v1
+kind: Service
+metadata:
+  name: toolbox-otel-collector
+  namespace: toolbox
+  labels:
+    app: toolbox
+    app.kubernetes.io/name: toolbox
+    app.kubernetes.io/component: otel-collector
+spec:
+  selector:
+    app: toolbox
+  ports:
+  - name: otlp-grpc
+    port: 4317
+    targetPort: 4317
+    protocol: TCP
+  - name: otlp-http
+    port: 4318
+    targetPort: 4318
+    protocol: TCP
+  - name: metrics
+    port: 8888
+    targetPort: 8888
+    protocol: TCP
+  - name: health
+    port: 13133
+    targetPort: 13133
+    protocol: TCP
+
+---
+# Optional: ConfigMap for external OTLP endpoint (e.g., Honeycomb, Jaeger)
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: toolbox-otel-config
+  namespace: toolbox
+data:
+  otel-collector.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      batch:
+        timeout: 1s
+        send_batch_size: 1024
+
+      resource:
+        attributes:
+          - key: environment
+            value: ${ENVIRONMENT:development}
+            action: upsert
+
+    exporters:
+      # Export to external OTLP endpoint
+      otlp:
+        endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT}
+        headers:
+          x-honeycomb-team: ${OTEL_HONEYCOMB_TEAM}
+
+      # Export to Prometheus for scraping
+      prometheus:
+        endpoint: 0.0.0.0:8888
+        namespace: toolbox
+
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [batch, resource]
+          exporters: [otlp]
+
+        metrics:
+          receivers: [otlp]
+          processors: [batch, resource]
+          exporters: [otlp, prometheus]

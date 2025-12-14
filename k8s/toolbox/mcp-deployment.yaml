@@ -1,0 +1,89 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: toolbox-mcp-server
+  namespace: toolbox
+  labels:
+    app: toolbox-mcp
+    app.kubernetes.io/name: toolbox
+    app.kubernetes.io/component: mcp-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: toolbox-mcp
+  template:
+    metadata:
+      labels:
+        app: toolbox-mcp
+        app.kubernetes.io/name: toolbox
+        app.kubernetes.io/component: mcp-server
+    spec:
+      initContainers:
+      - name: migrations
+        image: toolbox:mcp
+        command: ["python3", "-m", "alembic", "upgrade", "head"]
+        env:
+        - name: DATABASE_URL
+          value: "postgresql+asyncpg://toolregistry:devpassword@postgres:5432/toolregistry"
+        - name: EMBEDDING_ENDPOINT_URL
+          valueFrom:
+            configMapKeyRef:
+              name: toolbox-config
+              key: EMBEDDING_ENDPOINT_URL
+        - name: EMBEDDING_API_KEY
+          valueFrom:
+            configMapKeyRef:
+              name: toolbox-config
+              key: EMBEDDING_API_KEY
+        - name: EMBEDDING_DIMENSION
+          valueFrom:
+            configMapKeyRef:
+              name: toolbox-config
+              key: EMBEDDING_DIMENSION
+        - name: LOG_LEVEL
+          value: "INFO"
+        - name: SECRET_KEY
+          value: "test-secret-key-for-development-only"
+        - name: PYTHONPATH
+          value: "/app"
+      containers:
+      - name: toolbox-mcp
+        image: toolbox:mcp
+        command: ["python3", "-m", "app.mcp_fastmcp_server"]
+        env:
+        - name: DATABASE_URL
+          value: "postgresql+asyncpg://toolregistry:devpassword@postgres:5432/toolregistry"
+        - name: EMBEDDING_ENDPOINT_URL
+          valueFrom:
+            configMapKeyRef:
+              name: toolbox-config
+              key: EMBEDDING_ENDPOINT_URL
+        - name: EMBEDDING_API_KEY
+          valueFrom:
+            configMapKeyRef:
+              name: toolbox-config
+              key: EMBEDDING_API_KEY
+        - name: EMBEDDING_DIMENSION
+          valueFrom:
+            configMapKeyRef:
+              name: toolbox-config
+              key: EMBEDDING_DIMENSION
+        - name: LOG_LEVEL
+          value: "INFO"
+        - name: SECRET_KEY
+          value: "test-secret-key-for-development-only"
+        - name: PYTHONPATH
+          value: "/app"
+        # OpenTelemetry Configuration (optional for MCP server)
+        - name: OTEL_ENABLED
+          value: "false"  # Disabled for MCP server to reduce complexity
+        - name: ENVIRONMENT
+          value: "development"
+        resources:
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
