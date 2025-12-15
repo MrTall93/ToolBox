@@ -60,12 +60,13 @@ class ToolExecutor:
         # Create span for tool execution
         span = None
         if settings.OTEL_ENABLED:
+            impl_type_val = tool.implementation_type.value if hasattr(tool.implementation_type, 'value') else str(tool.implementation_type)
             span = create_span(
                 name=f"tool.execute.{tool.name}",
                 attributes={
                     "tool.name": tool.name,
                     "tool.category": tool.category or "unknown",
-                    "tool.implementation_type": tool.implementation_type.value,
+                    "tool.implementation_type": impl_type_val,
                     "tool.id": str(tool.id),
                 }
             )
@@ -221,6 +222,8 @@ class ToolExecutor:
             return await self._execute_webhook(tool, arguments)
         elif impl_type_str == ImplementationType.MCP_SERVER.value or impl_type == ImplementationType.MCP_SERVER or impl_type_str == "mcp_server":
             return await self._execute_mcp_server(tool, arguments)
+        elif impl_type_str == ImplementationType.LITELLM.value or impl_type == ImplementationType.LITELLM or impl_type_str == "litellm":
+            return await self._execute_litellm(tool, arguments)
         else:
             raise NotImplementedError(
                 f"Implementation type '{tool.implementation_type}' not supported"
@@ -589,6 +592,82 @@ class ToolExecutor:
             raise RuntimeError("MCP server request timed out")
         except Exception as e:
             raise RuntimeError(f"MCP stdio execution failed: {str(e)}")
+
+    async def _execute_litellm(self, tool: Tool, arguments: Dict[str, Any]) -> Any:
+        """
+        Execute tool via LiteLLM MCP gateway.
+
+        The implementation_code contains JSON config with:
+        - source: "litellm"
+        - tool_name: The tool name in LiteLLM
+        """
+        import httpx
+
+        if not tool.implementation_code:
+            raise ValueError("LiteLLM tool configuration is empty")
+
+        try:
+            config = json.loads(tool.implementation_code)
+            litellm_tool_name = config.get("tool_name", tool.name)
+
+            # Get LiteLLM configuration from settings
+            litellm_url = settings.LITELLM_MCP_SERVER_URL
+            litellm_api_key = settings.LITELLM_MCP_API_KEY
+
+            if not litellm_url:
+                raise ValueError("LITELLM_MCP_SERVER_URL not configured")
+
+            # Call LiteLLM's MCP REST tool endpoint
+            endpoint = f"{litellm_url.rstrip('/')}/mcp-rest/tools/call"
+
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            }
+            if litellm_api_key:
+                headers["x-litellm-api-key"] = litellm_api_key
+
+            payload = {
+                "name": litellm_tool_name,
+                "arguments": arguments
+            }
+
+            async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
+                response = await client.post(endpoint, json=payload, headers=headers)
+
+                if response.status_code == 200:
+                    data = response.json()
+
+                    # Check for errors
+                    if data.get("isError"):
+                        error_msg = "Unknown error"
+                        if "content" in data and data["content"]:
+                            for item in data["content"]:
+                                if item.get("type") == "text":
+                                    error_msg = item.get("text", error_msg)
+                                    break
+                        raise RuntimeError(f"LiteLLM tool error: {error_msg}")
+
+                    # Extract result from LiteLLM MCP response format
+                    # Format: {"content": [{"type": "text", "text": "..."}], "structuredContent": {...}}
+                    if "structuredContent" in data and data["structuredContent"]:
+                        return {"result": data["structuredContent"], "data": data}
+                    if "content" in data and data["content"]:
+                        # Extract text from content array
+                        for item in data["content"]:
+                            if item.get("type") == "text":
+                                return {"result": item.get("text"), "data": data}
+                        return {"result": data["content"], "data": data}
+                    if "result" in data:
+                        return {"result": data["result"], "data": data}
+                    return {"result": data, "data": data}
+                else:
+                    raise RuntimeError(f"LiteLLM call failed: {response.status_code} - {response.text}")
+
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"Invalid LiteLLM tool configuration: {str(e)}")
+        except httpx.HTTPError as e:
+            raise RuntimeError(f"LiteLLM HTTP request failed: {str(e)}")
 
 
 # Global executor instance
