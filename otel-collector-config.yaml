@@ -1,6 +1,6 @@
 # OpenTelemetry Collector Configuration for Toolbox
 # This config receives traces/metrics from the application and exports them
-# to various backends (OTLP endpoint, Prometheus, etc.)
+# to Prometheus (local) and optionally to an external OTLP endpoint
 
 receivers:
   otlp:
@@ -10,16 +10,6 @@ receivers:
       http:
         endpoint: 0.0.0.0:4318
 
-  prometheus:
-    config:
-      scrape_configs:
-        - job_name: 'toolbox'
-          scrape_interval: 30s
-          static_configs:
-            - targets: ['localhost:8888']
-          metrics_path: /metrics
-          scrape_timeout: 10s
-
 processors:
   batch:
     timeout: 1s
@@ -27,72 +17,47 @@ processors:
 
   memory_limiter:
     limit_mib: 512
+    check_interval: 1s
 
   resource:
     attributes:
-      - key: environment
-        value: ${ENVIRONMENT:development}
-        action: upsert
       - key: service.name
         value: toolbox
         action: upsert
-
-  # Add attributes to traces
-  attributes:
-    actions:
       - key: service.namespace
         value: tool-registry
         action: upsert
 
 exporters:
-  # Export to an external OTLP endpoint (e.g., Honeycomb, Jaeger, Tempo)
-  otlp:
-    endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT}
-    headers:
-      x-honeycomb-team: ${OTEL_HONEYCOMB_TEAM}
-    sending_queue:
-      enabled: true
-      num_consumers: 10
-      queue_size: 5000
-    retry_on_failure:
-      enabled: true
-      initial_interval: 5s
-      max_interval: 30s
-      max_elapsed_time: 300s
-
   # Export metrics to Prometheus for scraping
   prometheus:
-    endpoint: 0.0.0.0:8888
+    endpoint: 0.0.0.0:9090
     namespace: toolbox
     const_labels:
-      environment: ${ENVIRONMENT:development}
       service: toolbox
 
-  # Optional: Export to stdout for debugging
-  logging:
-    loglevel: info
+  # Export to stdout for debugging (always enabled)
+  debug:
+    verbosity: basic
 
 extensions:
   health_check:
     endpoint: 0.0.0.0:13133
 
-  pprof:
-    endpoint: 0.0.0.0:1777
-
 service:
-  extensions: [health_check, pprof]
+  extensions: [health_check]
 
   pipelines:
     traces:
       receivers: [otlp]
-      processors: [memory_limiter, batch, resource, attributes]
-      exporters: [otlp, logging]
+      processors: [memory_limiter, batch, resource]
+      exporters: [debug]
 
     metrics:
-      receivers: [otlp, prometheus]
+      receivers: [otlp]
       processors: [memory_limiter, batch, resource]
-      exporters: [otlp, prometheus, logging]
+      exporters: [prometheus, debug]
 
   telemetry:
     logs:
-      level: ${OTEL_LOG_LEVEL:info}
+      level: info

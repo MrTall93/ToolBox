@@ -9,8 +9,7 @@ A comprehensive Model Context Protocol (MCP) server for tool registration, disco
 - [Features](#features)
 - [Architecture](#architecture)
 - [Quick Start](#quick-start)
-- [Development](#development)
-- [Deployment](#deployment)
+- [Kubernetes Deployment](#kubernetes-deployment)
 - [API Documentation](#api-documentation)
 - [Configuration](#configuration)
 
@@ -18,7 +17,7 @@ A comprehensive Model Context Protocol (MCP) server for tool registration, disco
 
 ### Semantic Tool Discovery
 - Advanced tool search using vector embeddings and similarity matching
-- Support for natural language queries to find relevant tools (e.g., "cacluate addiction" finds calculator)
+- Support for natural language queries to find relevant tools (e.g., "calculate addition" finds calculator)
 - Hybrid search combining keyword and semantic matching
 - Fuzzy search with typo tolerance
 
@@ -29,58 +28,62 @@ A comprehensive Model Context Protocol (MCP) server for tool registration, disco
   - Syncs tools FROM external MCP servers
   - Syncs tools TO/FROM LiteLLM gateway
 - **Namespacing**: Tools are namespaced by server (e.g., `server_name:tool_name`)
-- **Hot Reloading**: Automatic re-sync when MCP servers change
+- **Tool Execution**: Execute tools directly via REST API or MCP protocol
 
 ### LiteLLM Integration
 - **Two-way Integration**:
   - Tools can be discovered from LiteLLM's MCP registry
-  - Tools can be registered with LiteLLM for use across multiple LLM providers
-- **FastMCP Server**: High-performance MCP server built with fastmcp framework
-- **JSON-RPC Support**: Full MCP protocol compliance with proper JSON-RPC messaging
+  - Tools can be executed via LiteLLM's MCP REST API
+- **Automatic Sync**: Syncs tools from LiteLLM MCP servers on startup
+- **Tool Deletion**: Deactivates tools that no longer exist in LiteLLM
 
 ### Production-Ready
 - Complete Kubernetes deployment with production-grade manifests
 - PostgreSQL with pgvector extension for vector storage
 - All configuration externalized via environment variables
-- Health checks, metrics, and observability support
-- UBI8-based Docker containers with security hardening
+- Health checks, metrics, and OpenTelemetry observability support
+- Python 3.11 slim-based Docker containers
 
 ## Architecture
 
 ```
 ┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐    ┌──────────────┐
-│   MCP Client    │───▶│  LiteLLM Gateway │◀───┤  Toolbox        │◀───┤ MCP Servers  │
-│  (Any LLM App)  │    │                 │    │(FastMCP Registry)│    │  (External)  │
-└─────────────────┘    └─────────────────┘    └─────────────────┘    └──────────────┘
-                                                          │
-                                                          ▼
-                                                   ┌─────────────────┐
-                                                   │  PostgreSQL +    │
-                                                   │    pgvector     │
-                                                   └─────────────────┘
-                                                          │
-                                                          ▼
-                                                   ┌─────────────────┐
-                                                   │ Embedding Service│
-                                                   │  (Local/OpenAI) │
-                                                   └─────────────────┘
+│   MCP Client    │───▶│  LiteLLM Gateway │◀──▶│  Toolbox        │◀───┤ MCP Servers  │
+│  (Claude, etc.) │    │   (Port 4000)    │    │  (Port 8000)    │    │  (External)  │
+└─────────────────┘    └──────────────────┘    └─────────────────┘    └──────────────┘
+                                                        │
+        ┌───────────────────────────────────────────────┼───────────────────┐
+        │                                               │                   │
+        ▼                                               ▼                   ▼
+┌─────────────────┐                            ┌─────────────────┐  ┌─────────────────┐
+│ MCP HTTP Server │                            │  PostgreSQL +   │  │Embedding Service│
+│   (Port 8080)   │                            │    pgvector     │  │ (LM Studio/API) │
+└─────────────────┘                            └─────────────────┘  └─────────────────┘
 ```
+
+### Components
+
+| Component | Port | Description |
+|-----------|------|-------------|
+| Toolbox REST API | 8000 | FastAPI REST endpoints for tool management |
+| Toolbox MCP Server | 8080 | FastMCP server for MCP Inspector/clients |
+| LiteLLM | 4000 | MCP gateway with multiple MCP servers |
+| PostgreSQL | 5432 | Database with pgvector for embeddings |
 
 ### Data Flow
 
-1. **MCP Server Discovery**: Toolbox automatically discovers tools from external MCP servers
-2. **Tool Registration**: Tools are registered with vector embeddings for semantic search
-3. **LiteLLM Sync**: Tools can be synced to/from LiteLLM for unified access
+1. **LiteLLM Sync**: Toolbox syncs tools from LiteLLM's MCP servers
+2. **Tool Registration**: Tools are stored with vector embeddings for semantic search
+3. **Tool Execution**: `call_tool` routes to appropriate executor (LiteLLM, MCP, Python, HTTP)
 4. **Semantic Search**: Natural language queries find relevant tools using similarity search
 
 ## Quick Start
 
 ### Prerequisites
 
-- Python 3.9+
+- Python 3.11+
 - PostgreSQL 16 with pgvector extension
-- Docker and Docker Compose (for local development)
-- Kubernetes (for production deployment)
+- Kubernetes (Docker Desktop, minikube, or cloud provider)
 - Local embedding service (e.g., LM Studio) or OpenAI API key
 
 ### Local Development
@@ -91,38 +94,33 @@ git clone <repository-url>
 cd Toolbox
 ```
 
-2. **Set up the environment**
+2. **Install dependencies**
 ```bash
-# Install Python dependencies
 pip install -r requirements.txt
-
-# Copy and configure environment variables
-cp .env.example .env
-# Edit .env with your configuration
 ```
 
 3. **Set up PostgreSQL with pgvector**
 ```bash
-# Using Docker
 docker run -d \
   --name postgres-pgvector \
-  -e POSTGRES_DB=tool_registry \
-  -e POSTGRES_USER=tool_registry \
-  -e POSTGRES_PASSWORD=tool_registry_pass \
+  -e POSTGRES_DB=toolregistry \
+  -e POSTGRES_USER=toolregistry \
+  -e POSTGRES_PASSWORD=devpassword \
   -p 5432:5432 \
   pgvector/pgvector:pg16
 ```
 
-4. **Run database migrations**
+4. **Configure environment**
 ```bash
-alembic upgrade head
+export DATABASE_URL="postgresql+asyncpg://toolregistry:devpassword@localhost:5432/toolregistry"
+export EMBEDDING_ENDPOINT_URL="http://localhost:1234/v1/embeddings"
+export EMBEDDING_API_KEY="dummy-key"
+export EMBEDDING_DIMENSION="768"
 ```
 
-5. **Start the embedding service** (if using local LM Studio)
+5. **Run migrations**
 ```bash
-# LM Studio should be running with:
-# - Model: text-embedding-nomic-embed-text-v1.5
-# - URL: http://127.0.0.1:1234/v1/embeddings
+alembic upgrade head
 ```
 
 6. **Start the application**
@@ -130,46 +128,57 @@ alembic upgrade head
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-7. **Test the MCP endpoints**
+7. **Test the endpoints**
 ```bash
 # Health check
 curl http://localhost:8000/health
 
-# List available tools
+# List tools
 curl -X POST http://localhost:8000/mcp/list_tools \
   -H "Content-Type: application/json" -d '{}'
 
-# Semantic search with typos
+# Semantic search
 curl -X POST http://localhost:8000/mcp/find_tool \
   -H "Content-Type: application/json" \
-  -d '{"query": "cacluate addiction numbers", "limit": 5}'
+  -d '{"query": "temperature conversion", "limit": 5}'
 
-# Execute a tool (example will vary based on available tools)
+# Execute a tool
 curl -X POST http://localhost:8000/mcp/call_tool \
   -H "Content-Type: application/json" \
-  -d '{
-    "tool_name": "tool_name",
-    "arguments": {}
-  }'
+  -d '{"tool_name": "converter-convert_temperature", "arguments": {"value": 100, "from_unit": "celsius", "to_unit": "fahrenheit"}}'
 ```
 
-### Docker Development
+## Kubernetes Deployment
 
+### Build and Deploy
+
+1. **Build the Docker image**
 ```bash
-# Build the image
-docker build -f Dockerfile.ubi8 -t toolbox:latest .
-
-# Run with environment variables
-docker run -p 8000:8000 \
-  -e DATABASE_URL="postgresql+asyncpg://tool_registry:password@host.docker.internal:5432/tool_registry" \
-  -e SECRET_KEY="your-secret-key" \
-  -e EMBEDDING_ENDPOINT_URL="http://host.docker.internal:1234/v1/embeddings" \
-  -e EMBEDDING_API_KEY="dummy-key" \
-  -e EMBEDDING_DIMENSION="768" \
-  toolbox:latest
+docker build -f Dockerfile.otel -t toolbox:latest .
 ```
 
-## Development
+2. **Deploy to Kubernetes**
+```bash
+# Create namespace and deploy all components
+kubectl apply -f k8s/namespace/
+kubectl apply -f k8s/postgres/
+kubectl apply -f k8s/toolbox/
+```
+
+3. **Verify deployment**
+```bash
+kubectl get pods -n toolbox
+kubectl get services -n toolbox
+```
+
+4. **Access services**
+```bash
+# REST API
+kubectl port-forward svc/toolbox 8000:8000 -n toolbox
+
+# MCP Server (for MCP Inspector)
+kubectl port-forward svc/toolbox-mcp-http 8080:8080 -n toolbox
+```
 
 ### Project Structure
 
@@ -185,100 +194,19 @@ Toolbox/
 │   ├── adapters/                 # LiteLLM adapter
 │   ├── execution/                # Tool execution engine
 │   ├── observability/            # OpenTelemetry instrumentation
-│   └── main.py                   # Application entry point
-│   ├── mcp_server.py             # FastMCP server implementation
-│   └── mcp_fastmcp_server.py     # Main FastMCP server module
-├── mcp-servers/                  # External MCP server configurations
+│   ├── main.py                   # Application entry point
+│   └── mcp_fastmcp_server.py     # FastMCP server module
 ├── k8s/                          # Kubernetes manifests
-│   └── toolbox/                  # Toolbox deployment
+│   ├── namespace/                # Namespace definition
+│   ├── postgres/                 # PostgreSQL deployment
+│   └── toolbox/                  # Toolbox deployments
+├── helm/                         # Helm chart
 ├── alembic/                      # Database migrations
-└── scripts/                      # Deployment and setup scripts
-```
-
-### Running Tests
-
-```bash
-# Run unit tests
-pytest tests/
-
-# Run with coverage
-pytest --cov=app tests/
-
-# Run integration tests
-pytest tests/integration/
-```
-
-## Deployment
-
-### Kubernetes Deployment
-
-The repository includes complete Kubernetes manifests for production deployment:
-
-1. **Deploy Infrastructure**
-```bash
-# Deploy all components
-kubectl apply -f k8s/
-```
-
-This deploys:
-- PostgreSQL with pgvector
-- Toolbox application (with FastMCP server)
-- LiteLLM gateway
-
-2. **Verify Deployment**
-```bash
-# Check all pods
-kubectl get pods -n toolbox
-
-# Check services
-kubectl get services -n toolbox
-
-# Port-forward to access services
-kubectl port-forward service/toolbox 8000:8000 -n toolbox
-kubectl port-forward service/litellm 4000:4000 -n toolbox
-```
-
-3. **Test Integration**
-```bash
-# Test MCP sync from external servers
-curl -X POST http://127.0.0.1:8000/admin/mcp/sync \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: dev-api-key"
-
-# Test sync from LiteLLM
-curl -X POST http://127.0.0.1:8000/admin/mcp/sync-from-liteLLM \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: dev-api-key"
-```
-
-### Manual MCP Server Registration
-
-To add a new MCP server:
-
-1. **Update Configuration**
-```yaml
-# In k8s/toolbox/configmap.yaml
-MCP_SERVERS: '[
-  {
-    "name": "my-mcp-server",
-    "url": "http://my-server:3000",
-    "description": "My custom MCP server",
-    "category": "custom",
-    "tags": ["custom", "tools"]
-  }
-]'
-```
-
-2. **Restart Toolbox**
-```bash
-kubectl rollout restart deployment/toolbox -n toolbox
-```
-
-3. **Trigger Sync**
-```bash
-curl -X POST http://localhost:8000/admin/mcp/sync \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: dev-api-key"
+├── scripts/                      # Runtime scripts
+├── tests/                        # Test suite
+├── examples/                     # Example scripts
+├── Dockerfile.otel               # Production Dockerfile
+└── otel-collector-config.yaml    # OpenTelemetry config
 ```
 
 ## API Documentation
@@ -290,7 +218,7 @@ curl -X POST http://localhost:8000/admin/mcp/sync \
 POST /mcp/list_tools
 Content-Type: application/json
 
-{}
+{"limit": 50}
 ```
 
 #### Find Tools (Semantic Search)
@@ -299,7 +227,7 @@ POST /mcp/find_tool
 Content-Type: application/json
 
 {
-  "query": "calculator for basic math operations",
+  "query": "calculator for basic math",
   "limit": 10,
   "threshold": 0.7
 }
@@ -311,38 +239,29 @@ POST /mcp/call_tool
 Content-Type: application/json
 
 {
-  "tool_name": "example_tool",
+  "tool_name": "converter-convert_temperature",
   "arguments": {
-    // Tool-specific arguments
+    "value": 100,
+    "from_unit": "celsius",
+    "to_unit": "fahrenheit"
   }
 }
 ```
 
 ### Admin Endpoints
 
-#### Sync from MCP Servers
-```http
-POST /admin/mcp/sync
-Content-Type: application/json
-Authorization: Bearer dev-api-key
-```
-
 #### Sync from LiteLLM
 ```http
 POST /admin/mcp/sync-from-liteLLM
 Content-Type: application/json
-Authorization: Bearer dev-api-key
+X-API-Key: dev-api-key
 ```
 
-#### Sync Specific Server
+#### Sync from External MCP Servers
 ```http
-POST /admin/mcp/sync/server
+POST /admin/mcp/sync
 Content-Type: application/json
-Authorization: Bearer dev-api-key
-
-{
-  "server_name": "external_server_name"
-}
+X-API-Key: dev-api-key
 ```
 
 ### Health Endpoints
@@ -353,133 +272,107 @@ Authorization: Bearer dev-api-key
 
 ### Interactive Documentation
 
-Access the interactive API documentation at `http://localhost:8000/docs` when running locally.
+Access Swagger UI at `http://localhost:8000/docs` when running locally.
 
 ## Configuration
 
 ### Environment Variables
 
-All configuration is externalized via environment variables:
-
 #### Core Settings
 | Variable | Description | Required | Default |
 |----------|-------------|----------|---------|
-| `DATABASE_URL` | PostgreSQL connection string | ✅ | - |
-| `SECRET_KEY` | Application secret key | ✅ | - |
-| `LOG_LEVEL` | Logging level | ❌ | `DEBUG` |
-| `CORS_ORIGINS` | Allowed CORS origins | ❌ | `http://localhost:30800,http://localhost:30400` |
+| `DATABASE_URL` | PostgreSQL connection string | Yes | - |
+| `SECRET_KEY` | Application secret key | Yes | - |
+| `LOG_LEVEL` | Logging level | No | `INFO` |
+| `CORS_ORIGINS` | Allowed CORS origins | No | `*` |
 
 #### Embedding Settings
 | Variable | Description | Required | Default |
 |----------|-------------|----------|---------|
-| `EMBEDDING_ENDPOINT_URL` | Embedding service URL | ✅ | `http://host.docker.internal:1234/v1/embeddings` |
-| `EMBEDDING_API_KEY` | Embedding service API key | ✅ | `dummy-key` |
-| `EMBEDDING_DIMENSION` | Embedding vector dimension | ❌ | `768` |
+| `EMBEDDING_ENDPOINT_URL` | Embedding service URL | Yes | - |
+| `EMBEDDING_API_KEY` | Embedding service API key | Yes | - |
+| `EMBEDDING_DIMENSION` | Embedding vector dimension | No | `768` |
+
+#### LiteLLM Integration
+| Variable | Description | Required | Default |
+|----------|-------------|----------|---------|
+| `LITELLM_SYNC_ENABLED` | Enable LiteLLM sync | No | `true` |
+| `LITELLM_MCP_SERVER_URL` | LiteLLM server URL | No | - |
+| `LITELLM_MCP_API_KEY` | LiteLLM API key | No | - |
 
 #### MCP Server Settings
 | Variable | Description | Required | Default |
 |----------|-------------|----------|---------|
-| `MCP_SERVERS` | JSON array of MCP servers to sync from | ❌ | `[]` |
-| `MCP_AUTO_SYNC_ON_STARTUP` | Auto-sync on application start | ❌ | `true` |
-| `MCP_REQUEST_TIMEOUT` | Request timeout for MCP servers | ❌ | `30.0` |
+| `MCP_SERVERS` | JSON array of MCP servers | No | `[]` |
+| `MCP_AUTO_SYNC_ON_STARTUP` | Auto-sync on startup | No | `true` |
+| `MCP_REQUEST_TIMEOUT` | Request timeout (seconds) | No | `30.0` |
 
-#### LiteLLM Integration Settings
+#### OpenTelemetry Settings
 | Variable | Description | Required | Default |
 |----------|-------------|----------|---------|
-| `LITELLM_SYNC_ENABLED` | Enable LiteLLM sync | ❌ | `true` |
-| `LITELLM_MCP_SERVER_URL` | LiteLLM MCP server URL | ❌ | `http://litellm:4000` |
-| `LITELLM_MCP_API_KEY` | LiteLLM MCP API key | ❌ | `sk-12345` |
+| `OTEL_ENABLED` | Enable OpenTelemetry | No | `false` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP endpoint | No | - |
+| `OTEL_SERVICE_NAME` | Service name | No | `toolbox` |
 
-### MCP Server Configuration Format
+## MCP Inspector
 
-```json
-[
-  {
-    "name": "server-name",
-    "url": "http://server-host:port",
-    "description": "Server description",
-    "category": "category-name",
-    "tags": ["tag1", "tag2"]
-  }
-]
+Connect MCP Inspector to the FastMCP server:
+
+1. Start the MCP HTTP deployment:
+```bash
+kubectl apply -f k8s/toolbox/mcp-http-deployment.yaml
 ```
 
-### Database Setup
-
-```sql
--- Enable required extensions
-CREATE EXTENSION IF NOT EXISTS vector;
-CREATE EXTENSION IF NOT EXISTS pg_trgm;
-
--- Configure pgvector for optimal performance
-ALTER SYSTEM SET ivfflat.probes = 10;
+2. Port-forward:
+```bash
+kubectl port-forward svc/toolbox-mcp-http 8080:8080 -n toolbox
 ```
 
-### Production Settings
+3. Connect MCP Inspector to: `http://localhost:8080/mcp`
 
-For production deployments, ensure:
-- Use real secret keys and API keys
-- Configure proper database connection pooling
-- Set appropriate resource limits
-- Enable monitoring and alerting
-- Use HTTPS for all communications
-
-## FastMCP Server
-
-The Toolbox application includes a FastMCP server implementation built with the fastmcp framework:
-
-### Features
-- **High Performance**: Optimized for speed and efficiency
-- **MCP Protocol Compliance**: Full support for MCP standard
-- **Tool Registry Integration**: Direct access to all registered tools
-- **Semantic Search**: Natural language tool discovery
-- **External MCP Server Sync**: Automatically discovers and syncs tools from external MCP servers
-
-### Running the FastMCP Server
-
-The FastMCP server can be run in multiple ways:
-
-1. **As a stdio server** (for MCP clients like Claude Desktop)
-2. **As an HTTP server** (for web-based integrations)
-3. **Integrated with LiteLLM** (for unified AI tool access)
-
-See [MCP_SERVER.md](MCP_SERVER.md) for detailed instructions on running and using the FastMCP server.
+Available tools in MCP Inspector:
+- `find_tools` - Search for tools using natural language
+- `call_tool` - Execute a tool by name
+- `list_tools` - List all available tools
+- `get_tool_schema` - Get schema for a specific tool
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **Tools not syncing from external MCP servers**
-   - Check if external MCP servers are accessible
-   - Verify network connectivity between services
-   - Check server logs for errors
+1. **Tools not syncing from LiteLLM**
+   - Verify LiteLLM is running and accessible
+   - Check `LITELLM_MCP_SERVER_URL` and `LITELLM_MCP_API_KEY`
+   - Ensure LiteLLM has MCP servers configured
 
 2. **Semantic search not working**
-   - Verify embedding service is running and accessible
-   - Check EMBEDDING_ENDPOINT_URL and EMBEDDING_API_KEY
-   - Ensure vectors are generated in the database
+   - Verify embedding service is running
+   - Check `EMBEDDING_ENDPOINT_URL` connectivity
+   - Ensure vectors are generated in database
 
-3. **LiteLLM integration issues**
-   - Verify LiteLLM is running and accessible
-   - Check LITELLM_MCP_API_KEY matches LiteLLM's master_key
-   - Ensure MCP servers are properly registered in LiteLLM config
+3. **Tool execution failing**
+   - Check tool's `implementation_type` (LITELLM, MCP_SERVER, PYTHON_CODE, etc.)
+   - Verify LiteLLM connectivity for LITELLM type tools
+   - Check logs: `kubectl logs -l app=toolbox -n toolbox`
 
 ### Debug Commands
 
 ```bash
 # Check Toolbox logs
-kubectl logs -l app=toolbox -n toolbox
+kubectl logs deployment/toolbox -n toolbox
 
-# Check FastMCP server logs
-kubectl logs -l app=toolbox -n toolbox
+# Check MCP HTTP server logs
+kubectl logs deployment/toolbox-mcp-http -n toolbox
 
-# Test database connection
-kubectl exec -it deployment/toolbox -n toolbox -- python -c "from app.db.session import engine; print(engine.url)"
+# Verify database connection
+kubectl exec -it deployment/toolbox -n toolbox -- python3 -c \
+  "from app.db.session import engine; print('DB OK')"
 
-# Verify tools in database
-kubectl exec -it deployment/postgres -n toolbox -- psql -U tool_registry -d tool_registry -c "SELECT COUNT(*) FROM tools;"
+# Count tools in database
+kubectl exec -it deployment/postgres -n toolbox -- psql -U toolregistry \
+  -d toolregistry -c "SELECT COUNT(*) FROM tools;"
 ```
 
 ---
 
-Built for the MCP ecosystem with LiteLLM integration
+Built for the MCP ecosystem with LiteLLM integration.
