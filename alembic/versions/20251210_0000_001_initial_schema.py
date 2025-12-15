@@ -37,7 +37,7 @@ def upgrade() -> None:
         sa.Column("output_schema", sa.JSON(), nullable=True),
         sa.Column("implementation_type", sa.String(length=50), nullable=False),
         sa.Column("implementation_code", sa.Text(), nullable=True),
-        sa.Column("embedding", Vector(768), nullable=True),  # Updated for Nomic-embed-text-v1.5
+        sa.Column("embedding", Vector(1024), nullable=True),  # Updated for Nomic-embed-text-v1.5
         sa.Column("is_active", sa.Boolean(), nullable=False),
         sa.Column("version", sa.String(length=50), nullable=False),
         sa.Column("created_at", sa.DateTime(), nullable=False),

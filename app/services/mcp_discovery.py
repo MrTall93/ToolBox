@@ -7,6 +7,7 @@ It supports both HTTP-based MCP servers and stdio-based MCP servers via command 
 import asyncio
 import json
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Tuple
 from typing import Any, Dict, List, Optional
@@ -464,8 +465,10 @@ class MCPDiscoveryService:
         }
 
         try:
+            tls_cert_path = '/etc/ssl/certs/ca-custom.pem'
+            verify_ssl = tls_cert_path if os.path.exists(tls_cert_path) else True
             # LiteLLM exposes MCP tools via /v1/mcp/tools endpoint
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            async with httpx.AsyncClient(timeout=30.0, verify=verify_ssl) as client:
                 headers = {
                     "Content-Type": "application/json",
                     "Accept": "application/json",

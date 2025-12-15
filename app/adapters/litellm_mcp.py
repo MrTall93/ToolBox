@@ -9,6 +9,7 @@ through the LiteLLM interface.
 import asyncio
 import logging
 import time
+import os
 from typing import Any, Dict, List, Optional, Union
 from datetime import datetime, timezone
 
@@ -124,10 +125,18 @@ class LiteLLMMCPAdapter:
         self.timeout = timeout
         self.max_retries = max_retries
 
+        tls_cert_path = "/etc/ssl/certs/ca-custom.pem"
+        if os.path.exists(tls_cert_path):
+            verify_ssl = tls_cert_path
+        else:
+            verify_ssl = True
+
+
         # HTTP client for MCP requests
         self.client = httpx.AsyncClient(
             timeout=httpx.Timeout(timeout),
-            headers=self._get_headers()
+            headers=self._get_headers(),
+            verify=verify_ssl
         )
 
         self.logger = logging.getLogger(__name__)

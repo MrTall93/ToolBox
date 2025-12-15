@@ -7,7 +7,7 @@ import re
 import shlex
 import time
 from typing import Any, Callable, Dict, Optional
-
+import os
 import jsonschema
 
 from app.models.execution import ExecutionStatus
@@ -283,7 +283,17 @@ class ToolExecutor:
 
         try:
             # Parse endpoint configuration
-            config = json.loads(tool.implementation_code)
+            # Handle case where implementation_code is already a dict or list
+            if isinstance(tool.implementation_code, dict):
+                config = tool.implementation_code
+            elif isinstance(tool.implementation_code, str):
+                config = json.loads(tool.implementation_code)
+            else:
+                raise ValueError(f"Invalid implementation_code type: {type(tool.implementation_code)}")
+
+            if not isinstance(config, dict):
+                raise ValueError(f"Expected config to be a dict, got {type(config)}")
+
             url = config.get("url")
             method = config.get("method", "POST").upper()
             headers = config.get("headers", {})
@@ -291,14 +301,21 @@ class ToolExecutor:
             if not url:
                 raise ValueError("URL is required for HTTP endpoint")
 
-            async with httpx.AsyncClient() as client:
+
+            tls_cert_path = "/etc/ssl/certs/ca-custom.pem"
+            if os.path.exists(tls_cert_path):
+                verify_ssl = tls_cert_path
+            else:
+                verify_ssl = True
+
+            async with httpx.AsyncClient(verify=verify_ssl) as client:
                 response = await client.request(
                     method=method,
                     url=url,
                     json=arguments if method in ["POST", "PUT", "PATCH"] else None,
                     params=arguments if method == "GET" else None,
                     headers=headers,
-                    timeout=30.0
+                    timeout=30.0,
                 )
 
                 response.raise_for_status()
@@ -328,7 +345,17 @@ class ToolExecutor:
 
         try:
             # Parse command configuration
-            config = json.loads(tool.implementation_code)
+            # Handle case where implementation_code is already a dict or list
+            if isinstance(tool.implementation_code, dict):
+                config = tool.implementation_code
+            elif isinstance(tool.implementation_code, str):
+                config = json.loads(tool.implementation_code)
+            else:
+                raise ValueError(f"Invalid implementation_code type: {type(tool.implementation_code)}")
+
+            if not isinstance(config, dict):
+                raise ValueError(f"Expected config to be a dict, got {type(config)}")
+
             command_template = config.get("command")
             working_dir = config.get("working_dir")
             timeout = config.get("timeout", 30)
@@ -423,7 +450,15 @@ class ToolExecutor:
                 "timestamp": time.time(),
             }
 
-            async with httpx.AsyncClient() as client:
+
+            tls_cert_path = "/etc/ssl/certs/ca-custom.pem"
+            if os.path.exists(tls_cert_path):
+                verify_ssl = tls_cert_path
+            else:
+                verify_ssl = True
+
+
+            async with httpx.AsyncClient(verify=verify_ssl) as client:
                 response = await client.post(
                     webhook_url,
                     json=payload,
@@ -458,7 +493,17 @@ class ToolExecutor:
             raise ValueError("MCP server configuration is empty")
 
         try:
-            config = json.loads(tool.implementation_code)
+            # Handle case where implementation_code is already a dict or list
+            if isinstance(tool.implementation_code, dict):
+                config = tool.implementation_code
+            elif isinstance(tool.implementation_code, str):
+                config = json.loads(tool.implementation_code)
+            else:
+                raise ValueError(f"Invalid implementation_code type: {type(tool.implementation_code)}")
+
+            if not isinstance(config, dict):
+                raise ValueError(f"Expected config to be a dict, got {type(config)}")
+
             mcp_type = config.get("type", "mcp_http")
             original_tool_name = config.get("tool_name", tool.name.split(":")[-1])
 
@@ -497,7 +542,15 @@ class ToolExecutor:
             }),
         ]
 
-        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
+
+        tls_cert_path = "/etc/ssl/certs/ca-custom.pem"
+        if os.path.exists(tls_cert_path):
+            verify_ssl = tls_cert_path
+        else:
+            verify_ssl = True
+
+
+        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0), verify=verify_ssl) as client:
             last_error = None
 
             for endpoint, payload in endpoints_to_try:
@@ -607,7 +660,17 @@ class ToolExecutor:
             raise ValueError("LiteLLM tool configuration is empty")
 
         try:
-            config = json.loads(tool.implementation_code)
+            # Handle case where implementation_code is already a dict or list
+            if isinstance(tool.implementation_code, dict):
+                config = tool.implementation_code
+            elif isinstance(tool.implementation_code, str):
+                config = json.loads(tool.implementation_code)
+            else:
+                raise ValueError(f"Invalid implementation_code type: {type(tool.implementation_code)}")
+
+            if not isinstance(config, dict):
+                raise ValueError(f"Expected config to be a dict, got {type(config)}")
+
             litellm_tool_name = config.get("tool_name", tool.name)
 
             # Get LiteLLM configuration from settings
@@ -632,7 +695,15 @@ class ToolExecutor:
                 "arguments": arguments
             }
 
-            async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
+
+            tls_cert_path = "/etc/ssl/certs/ca-custom.pem"
+            if os.path.exists(tls_cert_path):
+                verify_ssl = tls_cert_path
+            else:
+                verify_ssl = True
+
+
+            async with httpx.AsyncClient(timeout=httpx.Timeout(60.0),verify=verify_ssl) as client:
                 response = await client.post(endpoint, json=payload, headers=headers)
 
                 if response.status_code == 200:
@@ -643,8 +714,14 @@ class ToolExecutor:
                         error_msg = "Unknown error"
                         if "content" in data and data["content"]:
                             for item in data["content"]:
-                                if item.get("type") == "text":
-                                    error_msg = item.get("text", error_msg)
+                                # Handle both dict and string content formats
+                                if isinstance(item, dict):
+                                    if item.get("type") == "text":
+                                        error_msg = item.get("text", error_msg)
+                                        break
+                                elif isinstance(item, str):
+                                    # If item is a string, use it directly as the error message
+                                    error_msg = item
                                     break
                         raise RuntimeError(f"LiteLLM tool error: {error_msg}")
 
@@ -655,8 +732,13 @@ class ToolExecutor:
                     if "content" in data and data["content"]:
                         # Extract text from content array
                         for item in data["content"]:
-                            if item.get("type") == "text":
-                                return {"result": item.get("text"), "data": data}
+                            # Handle both dict and string content formats
+                            if isinstance(item, dict):
+                                if item.get("type") == "text":
+                                    return {"result": item.get("text"), "data": data}
+                            elif isinstance(item, str):
+                                # If item is a string, return it directly
+                                return {"result": item, "data": data}
                         return {"result": data["content"], "data": data}
                     if "result" in data:
                         return {"result": data["result"], "data": data}

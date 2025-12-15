@@ -78,7 +78,10 @@ class Settings(BaseSettings):
 
     # LiteLLM Integration Settings
     LITELLM_SYNC_ENABLED: bool = True
-    LITELLM_MCP_SERVER_URL: str = "http://litellm:4000"
+    LITELLM_MCP_SERVER_URL: str = Field(
+        default="http://litellm:4000",
+        description="litellm mcp server"
+    )
     LITELLM_MCP_API_KEY: Optional[str] = None
     LITELLM_MCP_TIMEOUT: int = 30
     LITELLM_MCP_MAX_RETRIES: int = 3
