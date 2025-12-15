@@ -15,21 +15,29 @@ spec:
       labels:
         app: postgres
     spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
       containers:
       - name: postgres
-        image: ankane/pgvector:latest
+        image: bitnami/postgresql:16
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
         env:
-        - name: POSTGRES_DB
+        - name: POSTGRESQL_DATABASE
           valueFrom:
             configMapKeyRef:
               name: postgres-config
               key: postgres-db
-        - name: POSTGRES_USER
+        - name: POSTGRESQL_USERNAME
           valueFrom:
             configMapKeyRef:
               name: postgres-config
               key: postgres-user
-        - name: POSTGRES_PASSWORD
+        - name: POSTGRESQL_PASSWORD
           valueFrom:
             configMapKeyRef:
               name: postgres-config
@@ -38,7 +46,7 @@ spec:
         - containerPort: 5432
         volumeMounts:
         - name: postgres-storage
-          mountPath: /var/lib/postgresql/data
+          mountPath: /bitnami/postgresql
         livenessProbe:
           exec:
             command:

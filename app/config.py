@@ -40,6 +40,7 @@ class Settings(BaseSettings):
         description="URL of the embedding service endpoint",
     )
     EMBEDDING_API_KEY: Optional[str] = None
+    EMBEDDING_MODEL: str = "text-embedding-nomic-embed-text-v1.5"
     EMBEDDING_DIMENSION: int = 1536
 
     # Embedding Cache Configuration

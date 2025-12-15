@@ -35,6 +35,7 @@ class EmbeddingClient:
         self.api_key = api_key or settings.EMBEDDING_API_KEY
         self.timeout = timeout
         self.dimension = settings.EMBEDDING_DIMENSION
+        self.model = settings.EMBEDDING_MODEL
 
     async def embed_text(self, text: str) -> List[float]:
         """
@@ -74,19 +75,17 @@ class EmbeddingClient:
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
 
-        # Prepare request payload for LM Studio format
+        # Prepare request payload (OpenAI-compatible format)
         if len(texts) == 1:
-            # Single text
             payload = {
                 "input": texts[0],
-                "model": "text-embedding-nomic-embed-text-v1.5"  # LM Studio model
+                "model": self.model
             }
         else:
-            # Multiple texts - LM Studio might not support this, so batch them
-            # For now, send the first one and repeat calls if needed
+            # Multiple texts - some providers don't support batch, so use first
             payload = {
                 "input": texts[0],
-                "model": "text-embedding-nomic-embed-text-v1.5"
+                "model": self.model
             }
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:

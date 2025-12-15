@@ -41,6 +41,11 @@ spec:
             configMapKeyRef:
               name: toolbox-config
               key: EMBEDDING_DIMENSION
+        - name: EMBEDDING_MODEL
+          valueFrom:
+            configMapKeyRef:
+              name: toolbox-config
+              key: EMBEDDING_MODEL
         - name: LOG_LEVEL
           value: "INFO"
         - name: SECRET_KEY
@@ -72,6 +77,11 @@ spec:
             configMapKeyRef:
               name: toolbox-config
               key: EMBEDDING_DIMENSION
+        - name: EMBEDDING_MODEL
+          valueFrom:
+            configMapKeyRef:
+              name: toolbox-config
+              key: EMBEDDING_MODEL
         - name: LOG_LEVEL
           value: "INFO"
         - name: SECRET_KEY
