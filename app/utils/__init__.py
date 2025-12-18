@@ -16,8 +16,14 @@ from .validation import (
     create_safe_error_response,
     SecurityValidator,
 )
+from .http import (
+    get_ssl_verify,
+    create_http_client,
+    DEFAULT_CUSTOM_CERT_PATH,
+)
 
 __all__ = [
+    # Validation utilities
     "ValidationError",
     "validate_embedding_vector",
     "validate_tool_name",
@@ -32,4 +38,8 @@ __all__ = [
     "validate_tool_arguments",
     "create_safe_error_response",
     "SecurityValidator",
+    # HTTP utilities
+    "get_ssl_verify",
+    "create_http_client",
+    "DEFAULT_CUSTOM_CERT_PATH",
 ]

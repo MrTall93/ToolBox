@@ -1,18 +1,22 @@
 """Tool execution engine for running registered tools."""
 
+import asyncio
 import importlib
 import json
 import logging
 import re
 import shlex
+import subprocess
 import time
 from typing import Any, Callable, Dict, Optional
-import os
+
+import httpx
 import jsonschema
 
 from app.models.execution import ExecutionStatus
 from app.models.tool import Tool, ImplementationType
 from app.config import settings
+from app.utils.http import get_ssl_verify, create_http_client
 
 logger = logging.getLogger(__name__)
 
@@ -164,9 +168,8 @@ class ToolExecutor:
                         "error_type": error_type
                     })
 
-            self.logger.error(
-                f"Failed to execute tool '{tool.name}': {error_message}"
-            )
+            # Log with full stack trace for debugging
+            self.logger.exception(f"Failed to execute tool '{tool.name}'")
 
             return {
                 "success": False,
@@ -276,8 +279,6 @@ class ToolExecutor:
 
     async def _execute_http_endpoint(self, tool: Tool, arguments: Dict[str, Any]) -> Any:
         """Execute HTTP endpoint implementation."""
-        import httpx
-
         if not tool.implementation_code:
             raise ValueError("HTTP endpoint configuration is empty")
 
@@ -301,21 +302,13 @@ class ToolExecutor:
             if not url:
                 raise ValueError("URL is required for HTTP endpoint")
 
-
-            tls_cert_path = "/etc/ssl/certs/ca-custom.pem"
-            if os.path.exists(tls_cert_path):
-                verify_ssl = tls_cert_path
-            else:
-                verify_ssl = True
-
-            async with httpx.AsyncClient(verify=verify_ssl) as client:
+            async with create_http_client(timeout=30.0) as client:
                 response = await client.request(
                     method=method,
                     url=url,
                     json=arguments if method in ["POST", "PUT", "PATCH"] else None,
                     params=arguments if method == "GET" else None,
                     headers=headers,
-                    timeout=30.0,
                 )
 
                 response.raise_for_status()
@@ -338,8 +331,6 @@ class ToolExecutor:
         Uses shlex to safely parse command strings and avoids shell=True
         to prevent command injection attacks.
         """
-        import subprocess
-
         if not tool.implementation_code:
             raise ValueError("Command configuration is empty")
 
@@ -434,8 +425,6 @@ class ToolExecutor:
 
     async def _execute_webhook(self, tool: Tool, arguments: Dict[str, Any]) -> Any:
         """Execute webhook implementation."""
-        import httpx
-
         if not tool.implementation_code:
             raise ValueError("Webhook URL is required")
 
@@ -450,19 +439,10 @@ class ToolExecutor:
                 "timestamp": time.time(),
             }
 
-
-            tls_cert_path = "/etc/ssl/certs/ca-custom.pem"
-            if os.path.exists(tls_cert_path):
-                verify_ssl = tls_cert_path
-            else:
-                verify_ssl = True
-
-
-            async with httpx.AsyncClient(verify=verify_ssl) as client:
+            async with create_http_client(timeout=30.0) as client:
                 response = await client.post(
                     webhook_url,
                     json=payload,
-                    timeout=30.0
                 )
 
                 response.raise_for_status()
@@ -486,9 +466,6 @@ class ToolExecutor:
         - command: Command list for stdio-based MCP servers
         - tool_name: Original tool name on the MCP server
         """
-        import asyncio
-        import httpx
-
         if not tool.implementation_code:
             raise ValueError("MCP server configuration is empty")
 
@@ -524,8 +501,6 @@ class ToolExecutor:
         arguments: Dict[str, Any]
     ) -> Any:
         """Execute tool on HTTP-based MCP server."""
-        import httpx
-
         server_url = config.get("server_url", "").rstrip("/")
         if not server_url:
             raise ValueError("MCP server URL is required")
@@ -542,15 +517,7 @@ class ToolExecutor:
             }),
         ]
 
-
-        tls_cert_path = "/etc/ssl/certs/ca-custom.pem"
-        if os.path.exists(tls_cert_path):
-            verify_ssl = tls_cert_path
-        else:
-            verify_ssl = True
-
-
-        async with httpx.AsyncClient(timeout=httpx.Timeout(30.0), verify=verify_ssl) as client:
+        async with create_http_client(timeout=30.0) as client:
             last_error = None
 
             for endpoint, payload in endpoints_to_try:
@@ -594,8 +561,6 @@ class ToolExecutor:
         arguments: Dict[str, Any]
     ) -> Any:
         """Execute tool on stdio-based MCP server."""
-        import asyncio
-
         command = config.get("command", [])
         if not command:
             raise ValueError("MCP server command is required")
@@ -654,8 +619,6 @@ class ToolExecutor:
         - source: "litellm"
         - tool_name: The tool name in LiteLLM
         """
-        import httpx
-
         if not tool.implementation_code:
             raise ValueError("LiteLLM tool configuration is empty")
 
@@ -695,15 +658,7 @@ class ToolExecutor:
                 "arguments": arguments
             }
 
-
-            tls_cert_path = "/etc/ssl/certs/ca-custom.pem"
-            if os.path.exists(tls_cert_path):
-                verify_ssl = tls_cert_path
-            else:
-                verify_ssl = True
-
-
-            async with httpx.AsyncClient(timeout=httpx.Timeout(60.0),verify=verify_ssl) as client:
+            async with create_http_client(timeout=60.0) as client:
                 response = await client.post(endpoint, json=payload, headers=headers)
 
                 if response.status_code == 200:

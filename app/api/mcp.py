@@ -6,22 +6,15 @@ Implements the three core MCP endpoints:
 - POST /mcp/find_tool - Semantic search for tools
 - POST /mcp/call_tool - Execute a tool
 """
-from typing import Dict
+import logging
+import time
+from typing import Annotated, Dict
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-import time
 
 from app.db.session import get_db
 from app.config import settings
-
-# OpenTelemetry imports (optional, only if enabled)
-if settings.OTEL_ENABLED:
-    from app.observability import (
-        create_span,
-        record_search_metrics,
-        add_span_attributes,
-        add_span_event
-    )
 from app.registry import ToolRegistry
 from app.execution.executor import executor
 from app.schemas.mcp import (
@@ -36,12 +29,27 @@ from app.schemas.mcp import (
 )
 from app.models.execution import ExecutionStatus
 
+# Import observability functions (noop when disabled)
+from app.observability import (
+    create_span,
+    record_search_metrics,
+    add_span_attributes,
+    add_span_event,
+)
+
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/mcp", tags=["MCP Protocol"])
 
 
+# Dependency functions
 def get_tool_registry(db: AsyncSession = Depends(get_db)) -> ToolRegistry:
     """Dependency to get ToolRegistry instance."""
     return ToolRegistry(session=db)
+
+
+# Annotated type aliases for cleaner dependency injection
+RegistryDep = Annotated[ToolRegistry, Depends(get_tool_registry)]
 
 
 @router.post(
@@ -52,7 +60,7 @@ def get_tool_registry(db: AsyncSession = Depends(get_db)) -> ToolRegistry:
 )
 async def list_tools(
     request: ListToolsRequest,
-    registry: ToolRegistry = Depends(get_tool_registry),
+    registry: RegistryDep,
 ) -> ListToolsResponse:
     """
     List all available tools.
@@ -87,6 +95,7 @@ async def list_tools(
         )
 
     except Exception as e:
+        logger.exception("Failed to list tools")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to list tools: {str(e)}",
@@ -102,7 +111,7 @@ async def list_tools(
 )
 async def find_tool(
     request: FindToolRequest,
-    registry: ToolRegistry = Depends(get_tool_registry),
+    registry: RegistryDep,
 ) -> FindToolResponse:
     """
     Find tools using semantic search.
@@ -116,27 +125,24 @@ async def find_tool(
 
     Returns tools ranked by relevance with similarity scores.
     """
-    # Create span for search operation
-    span = None
-    if settings.OTEL_ENABLED:
-        span = create_span(
-            name="mcp.find_tool",
-            attributes={
-                "query": request.query,
-                "limit": request.limit,
-                "threshold": request.threshold,
-                "category": request.category or "all",
-                "use_hybrid": request.use_hybrid,
-                "query_length": len(request.query)
-            }
-        )
+    # Create span for search operation (noop if OTEL disabled)
+    span = create_span(
+        name="mcp.find_tool",
+        attributes={
+            "query": request.query,
+            "limit": request.limit,
+            "threshold": request.threshold,
+            "category": request.category or "all",
+            "use_hybrid": request.use_hybrid,
+            "query_length": len(request.query)
+        }
+    )
 
     start_time = time.time()
 
     try:
         # Add search start event
-        if settings.OTEL_ENABLED and span:
-            add_span_event("search.started")
+        add_span_event("search.started")
 
         # Perform semantic search
         results = await registry.find_tool(
@@ -148,10 +154,7 @@ async def find_tool(
         )
 
         # Record search completion event
-        if settings.OTEL_ENABLED and span:
-            add_span_event("search.completed", {
-                "results_found": len(results)
-            })
+        add_span_event("search.completed", {"results_found": len(results)})
 
         search_time = time.time() - start_time
 
@@ -164,21 +167,19 @@ async def find_tool(
             for tool, score in results
         ]
 
-        # Record search metrics
-        if settings.OTEL_ENABLED:
-            query_type = "hybrid" if request.use_hybrid else "vector"
-            record_search_metrics(
-                query_type=query_type,
-                results_count=len(results),
-                search_time=search_time,
-                query_length=len(request.query),
-                threshold=request.threshold
-            )
+        # Record search metrics (noop if OTEL disabled)
+        query_type = "hybrid" if request.use_hybrid else "vector"
+        record_search_metrics(
+            query_type=query_type,
+            results_count=len(results),
+            search_time=search_time,
+            query_length=len(request.query),
+            threshold=request.threshold
+        )
 
-            if span:
-                span.set_attribute("search.time_ms", int(search_time * 1000))
-                span.set_attribute("search.results_count", len(results))
-                span.set_attribute("search.success", True)
+        span.set_attribute("search.time_ms", int(search_time * 1000))
+        span.set_attribute("search.results_count", len(results))
+        span.set_attribute("search.success", True)
 
         return FindToolResponse(
             results=tool_results,
@@ -190,24 +191,23 @@ async def find_tool(
         # Record error
         search_time = time.time() - start_time
 
-        if settings.OTEL_ENABLED and span:
-            span.set_attribute("search.time_ms", int(search_time * 1000))
-            span.set_attribute("search.success", False)
-            span.set_attribute("error.type", type(e).__name__)
-            span.set_attribute("error.message", str(e))
-            add_span_event("search.failed", {
-                "error": str(e),
-                "error_type": type(e).__name__
-            })
+        span.set_attribute("search.time_ms", int(search_time * 1000))
+        span.set_attribute("search.success", False)
+        span.set_attribute("error.type", type(e).__name__)
+        span.set_attribute("error.message", str(e))
+        add_span_event("search.failed", {
+            "error": str(e),
+            "error_type": type(e).__name__
+        })
 
+        logger.exception(f"Failed to search tools for query: {request.query}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to search tools: {str(e)}",
         )
     finally:
-        # End the span
-        if settings.OTEL_ENABLED and span:
-            span.end()
+        # End the span (noop if OTEL disabled)
+        span.end()
 
 
 @router.post(
@@ -219,7 +219,7 @@ async def find_tool(
 )
 async def call_tool(
     request: CallToolRequest,
-    registry: ToolRegistry = Depends(get_tool_registry),
+    registry: RegistryDep,
 ) -> CallToolResponse:
     """
     Execute a tool.
@@ -311,10 +311,14 @@ async def call_tool(
                     error=str(e),
                     execution_time_ms=execution_time_ms,
                 )
-        except Exception:
-            pass  # Ignore errors during error recording
+        except Exception as record_error:
+            logger.warning(
+                f"Failed to record execution error for tool '{request.tool_name}': {record_error}",
+                exc_info=True
+            )
 
         # Return error response
+        logger.exception(f"Tool execution failed for '{request.tool_name}'")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Tool execution failed: {str(e)}",

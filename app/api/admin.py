@@ -10,13 +10,16 @@ Provides CRUD operations for tools:
 - POST /admin/tools/{tool_id}/reindex - Regenerate embedding
 - POST /admin/mcp/sync - Sync tools from MCP servers
 """
-from typing import Any, Dict, List, Optional
+import logging
+import time
+from typing import Annotated, Any, Dict, List, Optional
+
 from fastapi import APIRouter, Depends, HTTPException, status, Path, Body
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-import time
 
 from app.db.session import get_db
+from app.config import settings
 from app.middleware.auth import require_auth
 from app.registry import ToolRegistry
 from app.schemas.mcp import (
@@ -29,23 +32,30 @@ from app.schemas.mcp import (
 )
 from app.services.mcp_discovery import get_mcp_discovery_service, MCPServerConfig
 
-# Import OpenTelemetry functions if enabled
-from app.config import settings
-if settings.OTEL_ENABLED:
-    from app.observability import (
-        record_registry_operation,
-        update_registry_tools_count,
-        create_span,
-        add_span_event,
-        record_litellm_sync_operation
-    )
+# Import observability functions (noop when disabled)
+from app.observability import (
+    record_registry_operation,
+    update_registry_tools_count,
+    create_span,
+    add_span_event,
+    record_litellm_sync_operation,
+)
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
 
+# Dependency functions
 def get_tool_registry(db: AsyncSession = Depends(get_db)) -> ToolRegistry:
     """Dependency to get ToolRegistry instance."""
     return ToolRegistry(session=db)
+
+
+# Annotated type aliases for cleaner dependency injection
+RegistryDep = Annotated[ToolRegistry, Depends(get_tool_registry)]
+AuthDep = Annotated[str, Depends(require_auth)]
+DbSessionDep = Annotated[AsyncSession, Depends(get_db)]
 
 
 @router.post(
@@ -57,29 +67,27 @@ def get_tool_registry(db: AsyncSession = Depends(get_db)) -> ToolRegistry:
 )
 async def register_tool(
     request: RegisterToolRequest,
-    registry: ToolRegistry = Depends(get_tool_registry),
-    api_key: str = Depends(require_auth),
+    registry: RegistryDep,
+    api_key: AuthDep,
 ) -> RegisterToolResponse:
     """
     Register a new tool.
 
     Automatically generates embeddings for semantic search unless auto_embed=False.
     """
-    # Create span for operation if OpenTelemetry is enabled
-    span = None
-    if settings.OTEL_ENABLED:
-        span = create_span(
-            name="admin.register_tool",
-            attributes={
-                "tool.name": request.name,
-                "tool.category": request.category or "unknown",
-                "tool.auto_embed": str(request.auto_embed),
-            }
-        )
-        add_span_event("tool_registration_started", {
-            "tool_name": request.name,
-            "category": request.category
-        })
+    # Create span for operation (noop if OTEL disabled)
+    span = create_span(
+        name="admin.register_tool",
+        attributes={
+            "tool.name": request.name,
+            "tool.category": request.category or "unknown",
+            "tool.auto_embed": str(request.auto_embed),
+        }
+    )
+    add_span_event("tool_registration_started", {
+        "tool_name": request.name,
+        "category": request.category
+    })
 
     start_time = time.time()
     success = False
@@ -101,13 +109,12 @@ async def register_tool(
 
         success = True
 
-        # Record metrics
-        if settings.OTEL_ENABLED:
-            record_registry_operation("register", success=True)
-            add_span_event("tool_registered", {
-                "tool_id": tool.id,
-                "tool_name": tool.name
-            })
+        # Record metrics (noop if OTEL disabled)
+        record_registry_operation("register", success=True)
+        add_span_event("tool_registered", {
+            "tool_id": tool.id,
+            "tool_name": tool.name
+        })
 
         return RegisterToolResponse(
             success=True,
@@ -116,32 +123,30 @@ async def register_tool(
         )
 
     except ValueError as e:
-        if settings.OTEL_ENABLED:
-            record_registry_operation("register", success=False)
-            add_span_event("tool_registration_failed", {
-                "error": str(e),
-                "error_type": "ValidationError"
-            })
+        record_registry_operation("register", success=False)
+        add_span_event("tool_registration_failed", {
+            "error": str(e),
+            "error_type": "ValidationError"
+        })
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(e),
         )
     except Exception as e:
-        if settings.OTEL_ENABLED:
-            record_registry_operation("register", success=False)
-            add_span_event("tool_registration_failed", {
-                "error": str(e),
-                "error_type": "InternalServerError"
-            })
+        logger.exception(f"Failed to register tool '{request.name}'")
+        record_registry_operation("register", success=False)
+        add_span_event("tool_registration_failed", {
+            "error": str(e),
+            "error_type": "InternalServerError"
+        })
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to register tool: {str(e)}",
         )
     finally:
-        if span:
-            span.set_attribute("operation.duration", time.time() - start_time)
-            span.set_attribute("operation.success", str(success))
-            span.end()
+        span.set_attribute("operation.duration", time.time() - start_time)
+        span.set_attribute("operation.success", str(success))
+        span.end()
 
 
 @router.get(
@@ -151,9 +156,9 @@ async def register_tool(
     description="Get detailed information about a specific tool.",
 )
 async def get_tool(
+    registry: RegistryDep,
+    api_key: AuthDep,
     tool_id: int = Path(..., description="Tool ID"),
-    registry: ToolRegistry = Depends(get_tool_registry),
-    api_key: str = Depends(require_auth),
 ) -> ToolSchema:
     """Get tool by ID."""
     tool = await registry.get_tool(tool_id)
@@ -175,9 +180,9 @@ async def get_tool(
 )
 async def update_tool(
     request: UpdateToolRequest,
+    registry: RegistryDep,
+    api_key: AuthDep,
     tool_id: int = Path(..., description="Tool ID"),
-    registry: ToolRegistry = Depends(get_tool_registry),
-    api_key: str = Depends(require_auth),
 ) -> UpdateToolResponse:
     """
     Update a tool.
@@ -209,6 +214,7 @@ async def update_tool(
             detail=str(e),
         )
     except Exception as e:
+        logger.exception(f"Failed to update tool {tool_id}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to update tool: {str(e)}",
@@ -222,9 +228,9 @@ async def update_tool(
     description="Permanently delete a tool from the registry.",
 )
 async def delete_tool(
+    registry: RegistryDep,
+    api_key: AuthDep,
     tool_id: int = Path(..., description="Tool ID"),
-    registry: ToolRegistry = Depends(get_tool_registry),
-    api_key: str = Depends(require_auth),
 ) -> None:
     """
     Delete a tool.
@@ -240,6 +246,7 @@ async def delete_tool(
             detail=str(e),
         )
     except Exception as e:
+        logger.exception(f"Failed to delete tool {tool_id}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to delete tool: {str(e)}",
@@ -253,9 +260,9 @@ async def delete_tool(
     description="Soft delete - marks tool as inactive without removing it.",
 )
 async def deactivate_tool(
+    registry: RegistryDep,
+    api_key: AuthDep,
     tool_id: int = Path(..., description="Tool ID"),
-    registry: ToolRegistry = Depends(get_tool_registry),
-    api_key: str = Depends(require_auth),
 ) -> UpdateToolResponse:
     """Deactivate a tool (soft delete)."""
     try:
@@ -281,9 +288,9 @@ async def deactivate_tool(
     description="Reactivate a previously deactivated tool.",
 )
 async def activate_tool(
+    registry: RegistryDep,
+    api_key: AuthDep,
     tool_id: int = Path(..., description="Tool ID"),
-    registry: ToolRegistry = Depends(get_tool_registry),
-    api_key: str = Depends(require_auth),
 ) -> UpdateToolResponse:
     """Activate a tool."""
     try:
@@ -309,9 +316,9 @@ async def activate_tool(
     description="Get execution statistics for a tool (total runs, success rate, avg execution time).",
 )
 async def get_tool_stats(
+    registry: RegistryDep,
+    api_key: AuthDep,
     tool_id: int = Path(..., description="Tool ID"),
-    registry: ToolRegistry = Depends(get_tool_registry),
-    api_key: str = Depends(require_auth),
 ) -> ToolStatsResponse:
     """Get execution statistics for a tool."""
     tool = await registry.get_tool(tool_id)
@@ -348,9 +355,9 @@ async def get_tool_stats(
     description="Manually regenerate the embedding for a tool.",
 )
 async def reindex_tool(
+    registry: RegistryDep,
+    api_key: AuthDep,
     tool_id: int = Path(..., description="Tool ID"),
-    registry: ToolRegistry = Depends(get_tool_registry),
-    api_key: str = Depends(require_auth),
 ) -> UpdateToolResponse:
     """Regenerate embedding for a tool."""
     try:
@@ -368,6 +375,7 @@ async def reindex_tool(
             detail=str(e),
         )
     except Exception as e:
+        logger.exception(f"Failed to reindex tool {tool_id}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to reindex tool: {str(e)}",
@@ -438,6 +446,7 @@ async def sync_mcp_servers(
         )
 
     except Exception as e:
+        logger.exception("Failed to sync MCP servers")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to sync MCP servers: {str(e)}",
@@ -479,6 +488,7 @@ async def sync_single_mcp_server(
         )
 
     except Exception as e:
+        logger.exception(f"Failed to sync MCP server: {server.name}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to sync MCP server: {str(e)}",
@@ -491,8 +501,8 @@ async def sync_single_mcp_server(
     description="Sync all tools from LiteLLM gateway to Toolbox.",
 )
 async def sync_from_liteLLM(
-    db: AsyncSession = Depends(get_db),
-    api_key: str = Depends(require_auth),
+    db: DbSessionDep,
+    api_key: AuthDep,
 ) -> Dict[str, Any]:
     """
     Sync tools from LiteLLM gateway.
@@ -502,17 +512,15 @@ async def sync_from_liteLLM(
     2. Retrieves all registered tools
     3. Creates or updates tools in Toolbox
     """
-    # Create span for operation if OpenTelemetry is enabled
-    span = None
-    if settings.OTEL_ENABLED:
-        span = create_span(
-            name="admin.sync_from_liteLLM",
-            attributes={
-                "sync.source": "litellm",
-                "sync.direction": "inbound"
-            }
-        )
-        add_span_event("liteLLM_sync_started")
+    # Create span for operation (noop if OTEL disabled)
+    span = create_span(
+        name="admin.sync_from_liteLLM",
+        attributes={
+            "sync.source": "litellm",
+            "sync.direction": "inbound"
+        }
+    )
+    add_span_event("liteLLM_sync_started")
 
     start_time = time.time()
     success = False
@@ -526,40 +534,38 @@ async def sync_from_liteLLM(
         success = True
         total_tools = results.get("total_tools_created", 0) + results.get("total_tools_updated", 0)
 
-        # Record sync metrics
-        if settings.OTEL_ENABLED:
-            record_litellm_sync_operation(
-                server="litellm",
-                tools_count=total_tools,
-                duration=time.time() - start_time,
-                success=True
-            )
-            add_span_event("liteLLM_sync_completed", {
-                "tools_created": results.get("total_tools_created", 0),
-                "tools_updated": results.get("total_tools_updated", 0),
-                "tools_failed": results.get("total_tools_failed", 0)
-            })
+        # Record sync metrics (noop if OTEL disabled)
+        record_litellm_sync_operation(
+            server="litellm",
+            tools_count=total_tools,
+            duration=time.time() - start_time,
+            success=True
+        )
+        add_span_event("liteLLM_sync_completed", {
+            "tools_created": results.get("total_tools_created", 0),
+            "tools_updated": results.get("total_tools_updated", 0),
+            "tools_failed": results.get("total_tools_failed", 0)
+        })
 
         return results
 
     except Exception as e:
-        if settings.OTEL_ENABLED:
-            record_litellm_sync_operation(
-                server="litellm",
-                tools_count=0,
-                duration=time.time() - start_time,
-                success=False
-            )
-            add_span_event("liteLLM_sync_failed", {
-                "error": str(e),
-                "error_type": type(e).__name__
-            })
+        logger.exception("Failed to sync from LiteLLM")
+        record_litellm_sync_operation(
+            server="litellm",
+            tools_count=0,
+            duration=time.time() - start_time,
+            success=False
+        )
+        add_span_event("liteLLM_sync_failed", {
+            "error": str(e),
+            "error_type": type(e).__name__
+        })
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to sync from LiteLLM: {str(e)}",
         )
     finally:
-        if span:
-            span.set_attribute("operation.duration", time.time() - start_time)
-            span.set_attribute("operation.success", str(success))
-            span.end()
+        span.set_attribute("operation.duration", time.time() - start_time)
+        span.set_attribute("operation.success", str(success))
+        span.end()

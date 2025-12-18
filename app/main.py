@@ -4,19 +4,26 @@ import asyncio
 import logging
 import os
 import signal
+import time
+from contextlib import asynccontextmanager
+from typing import AsyncGenerator
 
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 
 from app.config import settings
-from app.db.session import get_db, close_db
+from app.db.session import get_db, close_db, AsyncSessionLocal
 from app.api import mcp, admin
 from app.registry import VectorStore, get_embedding_client
-from app.schemas.mcp import HealthCheckResponse
-# FastMCP server is run separately on port 8080 for MCP Inspector compatibility
-# from app.mcp_fastmcp_server import mcp as fastmcp_server
+from app.schemas.mcp import (
+    HealthCheckResponse,
+    DetailedHealthCheckResponse,
+    ComponentHealth,
+    ReadinessResponse,
+)
 
 # Initialize OpenTelemetry if enabled
 if settings.OTEL_ENABLED:
@@ -37,17 +44,81 @@ logger = logging.getLogger(__name__)
 # Global flag for graceful shutdown
 shutdown_event = asyncio.Event()
 
-# Signal handlers for graceful shutdown
+
 def handle_signal(signum: int, frame) -> None:
     """Handle shutdown signals gracefully."""
     logger.info(f"Received signal {signum}, initiating graceful shutdown...")
     shutdown_event.set()
 
+
 # Register signal handlers
 signal.signal(signal.SIGTERM, handle_signal)
 signal.signal(signal.SIGINT, handle_signal)
 
-# Create FastAPI application
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    """
+    Application lifespan manager.
+
+    Handles startup and shutdown events for the FastAPI application.
+    This replaces the deprecated @app.on_event("startup") and @app.on_event("shutdown").
+    """
+    # ==================== STARTUP ====================
+    logger.info(f"{settings.APP_NAME} v{settings.APP_VERSION} starting...")
+    logger.info("Interactive docs: http://localhost:8000/docs")
+    logger.info("MCP endpoints ready at /mcp/")
+    logger.info("Admin endpoints ready at /admin/")
+
+    # Test database connection
+    try:
+        async with AsyncSessionLocal() as db:
+            await db.execute(text("SELECT 1"))
+            logger.info("Database connection established")
+    except Exception as e:
+        logger.exception("Database connection failed")
+        raise
+
+    # Auto-sync MCP servers on startup
+    if settings.MCP_AUTO_SYNC_ON_STARTUP and settings.MCP_SERVERS:
+        logger.info(f"Auto-syncing {len(settings.MCP_SERVERS)} MCP servers...")
+        try:
+            from app.services.mcp_discovery import get_mcp_discovery_service
+            discovery_service = get_mcp_discovery_service()
+
+            async with AsyncSessionLocal() as db:
+                results = await discovery_service.sync_all_servers(session=db)
+                logger.info(
+                    f"MCP sync complete: {results['successful_syncs']}/{results['total_servers']} servers, "
+                    f"{results['total_tools_created']} created, {results['total_tools_updated']} updated"
+                )
+        except Exception as e:
+            # Log with stack trace for debugging, but don't fail startup
+            logger.warning(f"MCP auto-sync failed (non-fatal): {e}", exc_info=True)
+
+    yield  # Application runs here
+
+    # ==================== SHUTDOWN ====================
+    logger.info(f"{settings.APP_NAME} shutting down gracefully...")
+
+    # Give existing requests time to complete (grace period)
+    try:
+        await asyncio.wait_for(shutdown_event.wait(), timeout=30.0)
+        logger.info("Grace period for active requests completed")
+    except asyncio.TimeoutError:
+        logger.warning("Grace period timeout, forcing shutdown")
+
+    # Close database connections
+    try:
+        await close_db()
+        logger.info("Database connections closed")
+    except Exception as e:
+        logger.exception("Error closing database connections")
+
+    logger.info("Shutdown complete")
+
+
+# Create FastAPI application with lifespan
 app = FastAPI(
     title=settings.APP_NAME,
     version=settings.APP_VERSION,
@@ -55,6 +126,7 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
     openapi_url="/openapi.json",
+    lifespan=lifespan,
 )
 
 # Add CORS middleware
@@ -113,24 +185,24 @@ async def health_check(db: AsyncSession = Depends(get_db)) -> HealthCheckRespons
     try:
         await db.execute(text("SELECT 1"))
         db_healthy = True
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Database health check failed: {e}", exc_info=True)
 
     # Check embedding service
     embedding_healthy = False
     try:
         client = get_embedding_client()
         embedding_healthy = await client.health_check()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Embedding service health check failed: {e}", exc_info=True)
 
     # Count indexed tools
     indexed_tools = 0
     try:
         vector_store = VectorStore(db)
         indexed_tools = await vector_store.count_indexed_tools()
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"Failed to count indexed tools: {e}", exc_info=True)
 
     return HealthCheckResponse(
         status="healthy" if db_healthy else "unhealthy",
@@ -142,75 +214,122 @@ async def health_check(db: AsyncSession = Depends(get_db)) -> HealthCheckRespons
     )
 
 
-# Startup event
-@app.on_event("startup")
-async def startup_event():
-    """Initialize application on startup."""
-    logger.info(f"{settings.APP_NAME} v{settings.APP_VERSION} starting...")
-    logger.info("Interactive docs: http://localhost:8000/docs")
-    logger.info("MCP endpoints ready at /mcp/")
-    logger.info("Admin endpoints ready at /admin/")
+@app.get(
+    "/health/detailed",
+    response_model=DetailedHealthCheckResponse,
+    summary="Detailed health check",
+    description="Returns detailed health status including latency for each component.",
+)
+async def detailed_health_check(
+    db: AsyncSession = Depends(get_db)
+) -> DetailedHealthCheckResponse:
+    """
+    Detailed health check endpoint with component-level status.
 
-    # Test database connection
-    try:
-        async for db in get_db():
-            await db.execute(text("SELECT 1"))
-            logger.info("✅ Database connection established")
-            break
-    except Exception as e:
-        logger.error(f"❌ Database connection failed: {e}")
-        raise
+    Returns health status, latency, and error information for each component.
+    Overall status is:
+    - "healthy": All components are healthy
+    - "degraded": Some components are healthy
+    - "unhealthy": No components are healthy
+    """
+    components = {}
 
-    # Auto-sync MCP servers on startup
-    if settings.MCP_AUTO_SYNC_ON_STARTUP and settings.MCP_SERVERS:
-        logger.info(f"🔄 Auto-syncing {len(settings.MCP_SERVERS)} MCP servers...")
-        try:
-            from app.services.mcp_discovery import get_mcp_discovery_service
-            discovery_service = get_mcp_discovery_service()
-
-            async for db in get_db():
-                results = await discovery_service.sync_all_servers(session=db)
-                logger.info(
-                    f"✅ MCP sync complete: {results['successful_syncs']}/{results['total_servers']} servers, "
-                    f"{results['total_tools_created']} created, {results['total_tools_updated']} updated"
-                )
-                break
-        except Exception as e:
-            logger.warning(f"⚠️ MCP auto-sync failed (non-fatal): {e}")
-
-
-# Shutdown event
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleanup on shutdown with graceful shutdown."""
-    logger.info(f"👋 {settings.APP_NAME} shutting down gracefully...")
-
-    # Give existing requests time to complete (grace period)
-    try:
-        await asyncio.wait_for(shutdown_event.wait(), timeout=30.0)
-        logger.info("🕐 Grace period for active requests completed")
-    except asyncio.TimeoutError:
-        logger.warning("⏰ Grace period timeout, forcing shutdown")
-
-    # Close database connections
-    try:
-        await close_db()
-        logger.info("✅ Database connections closed")
-    except Exception as e:
-        logger.error(f"❌ Error closing database connections: {e}")
-
-    logger.info("🏁 Shutdown complete")
-
-
-@app.get("/ready")
-async def readiness_check(db: AsyncSession = Depends(get_db)) -> dict:
-    """Readiness probe for Kubernetes."""
+    # Check database
+    db_start = time.time()
     try:
         await db.execute(text("SELECT 1"))
-        return {"status": "ready", "service": settings.APP_NAME}
+        components["database"] = ComponentHealth(
+            healthy=True,
+            latency_ms=round((time.time() - db_start) * 1000, 2)
+        )
     except Exception as e:
-        logger.warning(f"Readiness check failed: {e}")
-        return {"status": "not_ready", "service": settings.APP_NAME}
+        logger.warning(f"Database health check failed: {e}", exc_info=True)
+        components["database"] = ComponentHealth(
+            healthy=False,
+            latency_ms=round((time.time() - db_start) * 1000, 2),
+            error=str(e)
+        )
+
+    # Check embedding service
+    embedding_start = time.time()
+    try:
+        client = get_embedding_client()
+        embedding_healthy = await client.health_check()
+        components["embedding_service"] = ComponentHealth(
+            healthy=embedding_healthy,
+            latency_ms=round((time.time() - embedding_start) * 1000, 2),
+            error=None if embedding_healthy else "Health check returned False"
+        )
+    except Exception as e:
+        logger.warning(f"Embedding service health check failed: {e}", exc_info=True)
+        components["embedding_service"] = ComponentHealth(
+            healthy=False,
+            latency_ms=round((time.time() - embedding_start) * 1000, 2),
+            error=str(e)
+        )
+
+    # Count indexed tools
+    indexed_tools = 0
+    try:
+        vector_store = VectorStore(db)
+        indexed_tools = await vector_store.count_indexed_tools()
+    except Exception as e:
+        logger.warning(f"Failed to count indexed tools: {e}", exc_info=True)
+
+    # Determine overall status
+    all_healthy = all(c.healthy for c in components.values())
+    any_healthy = any(c.healthy for c in components.values())
+
+    if all_healthy:
+        overall_status = "healthy"
+    elif any_healthy:
+        overall_status = "degraded"
+    else:
+        overall_status = "unhealthy"
+
+    return DetailedHealthCheckResponse(
+        status=overall_status,
+        service=settings.APP_NAME,
+        version=settings.APP_VERSION,
+        components=components,
+        indexed_tools=indexed_tools,
+    )
+
+
+@app.get(
+    "/ready",
+    response_model=ReadinessResponse,
+    responses={
+        200: {"description": "Service is ready to accept traffic"},
+        503: {"description": "Service is not ready"},
+    },
+    summary="Readiness probe",
+    description="Kubernetes readiness probe. Returns 503 if service is not ready.",
+)
+async def readiness_check(db: AsyncSession = Depends(get_db)) -> JSONResponse:
+    """
+    Readiness probe for Kubernetes.
+
+    Returns:
+        200: Service is ready to accept traffic
+        503: Service is not ready (database unavailable, etc.)
+    """
+    try:
+        await db.execute(text("SELECT 1"))
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={"status": "ready", "service": settings.APP_NAME, "error": None}
+        )
+    except Exception as e:
+        logger.warning(f"Readiness check failed: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content={
+                "status": "not_ready",
+                "service": settings.APP_NAME,
+                "error": str(e)
+            }
+        )
 
 
 @app.get("/live")

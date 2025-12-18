@@ -7,7 +7,7 @@ Defines request and response models for the MCP API:
 - call_tool: Execute a tool
 """
 from typing import List, Optional, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # ============================================================================
@@ -16,6 +16,8 @@ from pydantic import BaseModel, Field
 
 class ToolSchema(BaseModel):
     """Schema for tool information in MCP responses."""
+
+    model_config = ConfigDict(from_attributes=True)
 
     id: int
     name: str
@@ -26,9 +28,6 @@ class ToolSchema(BaseModel):
     output_schema: Optional[Dict[str, Any]] = None
     version: str = "1.0.0"
     is_active: bool = True
-
-    class Config:
-        from_attributes = True
 
 
 class ToolWithScore(BaseModel):
@@ -201,6 +200,14 @@ class ToolStatsResponse(BaseModel):
     avg_execution_time_ms: Optional[float] = None
 
 
+class ComponentHealth(BaseModel):
+    """Health status for a single component."""
+
+    healthy: bool = Field(..., description="Whether the component is healthy")
+    latency_ms: Optional[float] = Field(None, description="Health check latency in milliseconds")
+    error: Optional[str] = Field(None, description="Error message if unhealthy")
+
+
 class HealthCheckResponse(BaseModel):
     """Health check response."""
 
@@ -210,3 +217,23 @@ class HealthCheckResponse(BaseModel):
     database: bool = Field(..., description="Database connectivity status")
     embedding_service: bool = Field(..., description="Embedding service status")
     indexed_tools: int = Field(..., description="Number of tools with embeddings")
+
+
+class DetailedHealthCheckResponse(BaseModel):
+    """Detailed health check response with component-level status."""
+
+    status: str = Field(..., description="Overall status: healthy, degraded, or unhealthy")
+    service: str
+    version: str
+    components: Dict[str, ComponentHealth] = Field(
+        ..., description="Health status for each component"
+    )
+    indexed_tools: int = Field(..., description="Number of tools with embeddings")
+
+
+class ReadinessResponse(BaseModel):
+    """Response model for readiness check."""
+
+    status: str = Field(..., description="ready or not_ready")
+    service: str
+    error: Optional[str] = Field(None, description="Error message if not ready")
