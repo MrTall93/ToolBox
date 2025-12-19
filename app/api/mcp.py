@@ -8,7 +8,7 @@ Implements the three core MCP endpoints:
 """
 import logging
 import time
-from typing import Annotated, Dict
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,6 +26,7 @@ from app.schemas.mcp import (
     CallToolResponse,
     ToolSchema,
     ToolWithScore,
+    ErrorResponse,
 )
 from app.models.execution import ExecutionStatus
 
@@ -57,6 +58,9 @@ RegistryDep = Annotated[ToolRegistry, Depends(get_tool_registry)]
     response_model=ListToolsResponse,
     summary="List all tools",
     description="List all available tools with optional filtering by category and active status.",
+    responses={
+        500: {"model": ErrorResponse, "description": "Internal server error"},
+    },
 )
 async def list_tools(
     request: ListToolsRequest,
@@ -108,6 +112,9 @@ async def list_tools(
     summary="Find tools using semantic search",
     description="Search for tools using natural language queries. "
     "Uses vector embeddings for semantic similarity or hybrid search (vector + text).",
+    responses={
+        500: {"model": ErrorResponse, "description": "Internal server error"},
+    },
 )
 async def find_tool(
     request: FindToolRequest,
@@ -216,6 +223,11 @@ async def find_tool(
     summary="Execute a tool",
     description="Execute a tool by name with provided arguments. "
     "Records execution history and returns results.",
+    responses={
+        400: {"model": ErrorResponse, "description": "Tool is inactive"},
+        404: {"model": ErrorResponse, "description": "Tool not found"},
+        500: {"model": ErrorResponse, "description": "Internal server error"},
+    },
 )
 async def call_tool(
     request: CallToolRequest,

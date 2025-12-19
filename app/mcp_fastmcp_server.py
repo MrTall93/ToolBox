@@ -11,7 +11,7 @@ discover and invoke other tools from the registry.
 import asyncio
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from fastmcp import FastMCP
 
@@ -47,8 +47,8 @@ async def find_tools(
     query: str,
     limit: int = 10,
     threshold: float = 0.5,
-    category: Optional[str] = None,
-) -> Dict[str, Any]:
+    category: str | None = None,
+) -> dict[str, Any]:
     """
     Search for tools using semantic search.
 
@@ -114,8 +114,8 @@ async def find_tools(
 @mcp.tool
 async def call_tool(
     tool_name: str,
-    arguments: Dict[str, Any],
-) -> Dict[str, Any]:
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
     """
     Execute a registered tool by name.
 
@@ -179,10 +179,10 @@ async def call_tool(
 
 @mcp.tool
 async def list_tools(
-    category: Optional[str] = None,
+    category: str | None = None,
     limit: int = 50,
     offset: int = 0,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """
     List all available tools in the registry.
 
@@ -234,7 +234,7 @@ async def list_tools(
 
 
 @mcp.tool
-async def get_tool_schema(tool_name: str) -> Dict[str, Any]:
+async def get_tool_schema(tool_name: str) -> dict[str, Any]:
     """
     Get the full schema and details for a specific tool.
 
@@ -288,6 +288,180 @@ async def get_tool_schema(tool_name: str) -> Dict[str, Any]:
             return {
                 "error": str(e),
             }
+
+
+# ============================================================================
+# FastMCP Resources
+# ============================================================================
+
+@mcp.resource("toolbox://categories")
+async def get_categories() -> str:
+    """
+    Get all available tool categories in the registry.
+
+    Returns a list of unique categories that can be used to filter tools.
+    """
+    async with AsyncSessionLocal() as session:
+        registry = ToolRegistry(session=session)
+        try:
+            tools = await registry.list_tools(active_only=True, limit=1000)
+            categories = sorted(set(tool.category for tool in tools if tool.category))
+            return json.dumps({
+                "categories": categories,
+                "total": len(categories),
+            }, indent=2)
+        except Exception as e:
+            logger.error(f"Error getting categories: {e}")
+            return json.dumps({"error": str(e), "categories": []})
+
+
+@mcp.resource("toolbox://stats")
+async def get_registry_stats() -> str:
+    """
+    Get overall statistics about the tool registry.
+
+    Returns counts of tools by category, active/inactive status, etc.
+    """
+    async with AsyncSessionLocal() as session:
+        registry = ToolRegistry(session=session)
+        try:
+            all_tools = await registry.list_tools(active_only=False, limit=10000)
+            active_tools = [t for t in all_tools if t.is_active]
+
+            # Count by category
+            categories: dict[str, int] = {}
+            for tool in active_tools:
+                cat = tool.category or "uncategorized"
+                categories[cat] = categories.get(cat, 0) + 1
+
+            # Count by implementation type
+            impl_types: dict[str, int] = {}
+            for tool in active_tools:
+                impl = str(tool.implementation_type) if tool.implementation_type else "unknown"
+                impl_types[impl] = impl_types.get(impl, 0) + 1
+
+            return json.dumps({
+                "total_tools": len(all_tools),
+                "active_tools": len(active_tools),
+                "inactive_tools": len(all_tools) - len(active_tools),
+                "tools_by_category": categories,
+                "tools_by_implementation_type": impl_types,
+            }, indent=2)
+        except Exception as e:
+            logger.error(f"Error getting registry stats: {e}")
+            return json.dumps({"error": str(e)})
+
+
+@mcp.resource("toolbox://tools/{category}")
+async def get_tools_by_category(category: str) -> str:
+    """
+    Get all tools in a specific category.
+
+    Args:
+        category: The category name to filter by
+    """
+    async with AsyncSessionLocal() as session:
+        registry = ToolRegistry(session=session)
+        try:
+            tools = await registry.list_tools(
+                category=category,
+                active_only=True,
+                limit=1000,
+            )
+            tools_data = [
+                {
+                    "name": t.name,
+                    "description": t.description,
+                    "tags": t.tags or [],
+                    "version": t.version,
+                }
+                for t in tools
+            ]
+            return json.dumps({
+                "category": category,
+                "total": len(tools_data),
+                "tools": tools_data,
+            }, indent=2)
+        except Exception as e:
+            logger.error(f"Error getting tools by category: {e}")
+            return json.dumps({"error": str(e), "tools": []})
+
+
+# ============================================================================
+# FastMCP Prompts
+# ============================================================================
+
+@mcp.prompt
+def tool_discovery_prompt(task_description: str) -> str:
+    """
+    Generate a prompt for discovering relevant tools for a task.
+
+    Args:
+        task_description: Description of what the user wants to accomplish
+    """
+    return f"""I need to find tools that can help with the following task:
+
+Task: {task_description}
+
+Please use the find_tools function to search for relevant tools. Consider:
+1. Breaking down the task into sub-tasks if needed
+2. Searching with different query variations
+3. Checking tool input schemas to ensure they match requirements
+
+After finding tools, summarize:
+- Which tools are most relevant
+- What arguments each tool requires
+- Any limitations or considerations"""
+
+
+@mcp.prompt
+def tool_execution_prompt(tool_name: str, task_context: str) -> str:
+    """
+    Generate a prompt for executing a specific tool.
+
+    Args:
+        tool_name: Name of the tool to execute
+        task_context: Context about what the user wants to accomplish
+    """
+    return f"""I need to execute the tool "{tool_name}" for the following purpose:
+
+Context: {task_context}
+
+Please:
+1. First use get_tool_schema to get the full input schema for "{tool_name}"
+2. Construct the appropriate arguments based on the schema and context
+3. Execute the tool using call_tool
+4. Interpret and summarize the results
+
+If the tool fails, suggest alternative approaches or tools."""
+
+
+@mcp.prompt
+def workflow_planning_prompt(goal: str, constraints: str | None = None) -> str:
+    """
+    Generate a prompt for planning a multi-tool workflow.
+
+    Args:
+        goal: The end goal to achieve
+        constraints: Optional constraints or requirements
+    """
+    constraints_section = f"\nConstraints: {constraints}" if constraints else ""
+    return f"""I need to plan a workflow to achieve the following goal:
+
+Goal: {goal}{constraints_section}
+
+Please:
+1. Use list_tools or find_tools to discover available capabilities
+2. Identify which tools can contribute to the goal
+3. Plan the sequence of tool calls needed
+4. Consider data flow between tools (output of one as input to another)
+5. Identify any gaps where no suitable tool exists
+
+Provide a step-by-step plan with:
+- Tool name for each step
+- Required inputs and where they come from
+- Expected outputs
+- Error handling considerations"""
 
 
 # Run the server

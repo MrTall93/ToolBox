@@ -6,7 +6,7 @@ Defines request and response models for the MCP API:
 - find_tool: Semantic search for tools
 - call_tool: Execute a tool
 """
-from typing import List, Optional, Dict, Any
+from typing import Any
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -23,9 +23,9 @@ class ToolSchema(BaseModel):
     name: str
     description: str
     category: str
-    tags: List[str] = Field(default_factory=list)
-    input_schema: Dict[str, Any]
-    output_schema: Optional[Dict[str, Any]] = None
+    tags: list[str] = Field(default_factory=list)
+    input_schema: dict[str, Any]
+    output_schema: dict[str, Any] | None = None
     version: str = "1.0.0"
     is_active: bool = True
 
@@ -44,7 +44,7 @@ class ToolWithScore(BaseModel):
 class ListToolsRequest(BaseModel):
     """Request schema for list_tools endpoint."""
 
-    category: Optional[str] = Field(None, description="Filter by category")
+    category: str | None = Field(None, description="Filter by category")
     active_only: bool = Field(True, description="Only return active tools")
     limit: int = Field(100, ge=1, le=1000, description="Maximum number of tools")
     offset: int = Field(0, ge=0, description="Pagination offset")
@@ -53,7 +53,7 @@ class ListToolsRequest(BaseModel):
 class ListToolsResponse(BaseModel):
     """Response schema for list_tools endpoint."""
 
-    tools: List[ToolSchema]
+    tools: list[ToolSchema]
     total: int = Field(..., description="Total number of tools matching filters")
     limit: int
     offset: int
@@ -71,7 +71,7 @@ class FindToolRequest(BaseModel):
     threshold: float = Field(
         0.7, ge=0.0, le=1.0, description="Minimum similarity threshold (0-1)"
     )
-    category: Optional[str] = Field(None, description="Filter by category")
+    category: str | None = Field(None, description="Filter by category")
     use_hybrid: bool = Field(
         True, description="Use hybrid search (vector + text) for better results"
     )
@@ -80,7 +80,7 @@ class FindToolRequest(BaseModel):
 class FindToolResponse(BaseModel):
     """Response schema for find_tool endpoint."""
 
-    results: List[ToolWithScore]
+    results: list[ToolWithScore]
     query: str
     count: int = Field(..., description="Number of results returned")
 
@@ -93,10 +93,10 @@ class CallToolRequest(BaseModel):
     """Request schema for call_tool endpoint."""
 
     tool_name: str = Field(..., description="Name of the tool to execute")
-    arguments: Dict[str, Any] = Field(
+    arguments: dict[str, Any] = Field(
         default_factory=dict, description="Input arguments for the tool"
     )
-    metadata: Optional[Dict[str, Any]] = Field(
+    metadata: dict[str, Any] | None = Field(
         None, description="Optional execution metadata"
     )
 
@@ -107,9 +107,9 @@ class CallToolResponse(BaseModel):
     success: bool
     tool_name: str
     execution_id: int = Field(..., description="ID of the execution record")
-    output: Optional[Dict[str, Any]] = Field(None, description="Tool execution output")
-    error: Optional[str] = Field(None, description="Error message if execution failed")
-    execution_time_ms: Optional[int] = Field(
+    output: dict[str, Any] | None = Field(None, description="Tool execution output")
+    error: str | None = Field(None, description="Error message if execution failed")
+    execution_time_ms: int | None = Field(
         None, description="Execution duration in milliseconds"
     )
 
@@ -123,7 +123,7 @@ class ErrorResponse(BaseModel):
 
     error: str = Field(..., description="Error type")
     message: str = Field(..., description="Human-readable error message")
-    details: Optional[Dict[str, Any]] = Field(None, description="Additional error details")
+    details: dict[str, Any] | None = Field(None, description="Additional error details")
 
 
 # ============================================================================
@@ -136,21 +136,21 @@ class RegisterToolRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     description: str = Field(..., min_length=1)
     category: str = Field(..., min_length=1, max_length=100)
-    input_schema: Dict[str, Any] = Field(
+    input_schema: dict[str, Any] = Field(
         ..., description="JSON Schema for input validation"
     )
-    tags: List[str] = Field(default_factory=list)
-    output_schema: Optional[Dict[str, Any]] = Field(
+    tags: list[str] = Field(default_factory=list)
+    output_schema: dict[str, Any] | None = Field(
         None, description="JSON Schema for output"
     )
     implementation_type: str = Field(
         "python_function", description="Type of implementation"
     )
-    implementation_code: Optional[str] = Field(
+    implementation_code: str | None = Field(
         None, description="Implementation code or reference"
     )
     version: str = Field("1.0.0", description="Tool version")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
+    metadata: dict[str, Any] | None = Field(None, description="Additional metadata")
     auto_embed: bool = Field(True, description="Automatically generate embedding")
 
 
@@ -165,15 +165,15 @@ class RegisterToolResponse(BaseModel):
 class UpdateToolRequest(BaseModel):
     """Request schema for updating a tool."""
 
-    description: Optional[str] = None
-    category: Optional[str] = None
-    tags: Optional[List[str]] = None
-    input_schema: Optional[Dict[str, Any]] = None
-    output_schema: Optional[Dict[str, Any]] = None
-    implementation_code: Optional[str] = None
-    version: Optional[str] = None
-    is_active: Optional[bool] = None
-    metadata: Optional[Dict[str, Any]] = None
+    description: str | None = None
+    category: str | None = None
+    tags: list[str] | None = None
+    input_schema: dict[str, Any] | None = None
+    output_schema: dict[str, Any] | None = None
+    implementation_code: str | None = None
+    version: str | None = None
+    is_active: bool | None = None
+    metadata: dict[str, Any] | None = None
 
 
 class UpdateToolResponse(BaseModel):
@@ -197,15 +197,15 @@ class ToolStatsResponse(BaseModel):
     successful_executions: int
     failed_executions: int
     success_rate: float = Field(..., ge=0.0, le=1.0)
-    avg_execution_time_ms: Optional[float] = None
+    avg_execution_time_ms: float | None = None
 
 
 class ComponentHealth(BaseModel):
     """Health status for a single component."""
 
     healthy: bool = Field(..., description="Whether the component is healthy")
-    latency_ms: Optional[float] = Field(None, description="Health check latency in milliseconds")
-    error: Optional[str] = Field(None, description="Error message if unhealthy")
+    latency_ms: float | None = Field(None, description="Health check latency in milliseconds")
+    error: str | None = Field(None, description="Error message if unhealthy")
 
 
 class HealthCheckResponse(BaseModel):
@@ -225,7 +225,7 @@ class DetailedHealthCheckResponse(BaseModel):
     status: str = Field(..., description="Overall status: healthy, degraded, or unhealthy")
     service: str
     version: str
-    components: Dict[str, ComponentHealth] = Field(
+    components: dict[str, ComponentHealth] = Field(
         ..., description="Health status for each component"
     )
     indexed_tools: int = Field(..., description="Number of tools with embeddings")
@@ -236,4 +236,4 @@ class ReadinessResponse(BaseModel):
 
     status: str = Field(..., description="ready or not_ready")
     service: str
-    error: Optional[str] = Field(None, description="Error message if not ready")
+    error: str | None = Field(None, description="Error message if not ready")

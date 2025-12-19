@@ -15,6 +15,12 @@ from .validation import (
     validate_tool_arguments,
     create_safe_error_response,
     SecurityValidator,
+    # Database query sanitization
+    sanitize_like_pattern,
+    validate_identifier,
+    validate_sort_column,
+    validate_sort_direction,
+    validate_integer_id,
 )
 from .http import (
     get_ssl_verify,
@@ -38,6 +44,12 @@ __all__ = [
     "validate_tool_arguments",
     "create_safe_error_response",
     "SecurityValidator",
+    # Database query sanitization
+    "sanitize_like_pattern",
+    "validate_identifier",
+    "validate_sort_column",
+    "validate_sort_direction",
+    "validate_integer_id",
     # HTTP utilities
     "get_ssl_verify",
     "create_http_client",

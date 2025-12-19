@@ -2,7 +2,7 @@
 
 import json
 from functools import lru_cache
-from typing import List, Optional, Dict, Any
+from typing import Any
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -39,7 +39,7 @@ class Settings(BaseSettings):
         ...,
         description="URL of the embedding service endpoint",
     )
-    EMBEDDING_API_KEY: Optional[str] = None
+    EMBEDDING_API_KEY: str | None = None
     EMBEDDING_MODEL: str = "text-embedding-nomic-embed-text-v1.5"
     EMBEDDING_DIMENSION: int = 1536
 
@@ -57,8 +57,8 @@ class Settings(BaseSettings):
     USE_HYBRID_SEARCH: bool = True
 
     # Security
-    API_KEY: Optional[str] = None
-    CORS_ORIGINS: List[str] = Field(
+    API_KEY: str | None = None
+    CORS_ORIGINS: list[str] = Field(
         default=["http://localhost:3000", "http://localhost:8080", "http://localhost:8000"],
         description="Allowed CORS origins"
     )
@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     CACHE_TTL: int = 300  # seconds
 
     # MCP Server Discovery Settings
-    MCP_SERVERS: List[Dict[str, Any]] = Field(
+    MCP_SERVERS: list[dict[str, Any]] = Field(
         default=[],
         description="List of MCP servers to sync tools from"
     )
@@ -82,22 +82,22 @@ class Settings(BaseSettings):
         default="http://litellm:4000",
         description="litellm mcp server"
     )
-    LITELLM_MCP_API_KEY: Optional[str] = None
+    LITELLM_MCP_API_KEY: str | None = None
     LITELLM_MCP_TIMEOUT: int = 30
     LITELLM_MCP_MAX_RETRIES: int = 3
 
     # OpenTelemetry Configuration
-    OTEL_EXPORTER_OTLP_ENDPOINT: Optional[str] = None
-    OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: Optional[str] = None
+    OTEL_EXPORTER_OTLP_ENDPOINT: str | None = None
+    OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: str | None = None
     OTEL_SERVICE_NAME: str = "toolbox"
     OTEL_SERVICE_VERSION: str = "1.0.0"
-    OTEL_HONEYCOMB_TEAM: Optional[str] = None
+    OTEL_HONEYCOMB_TEAM: str | None = None
     OTEL_RESOURCE_ATTRIBUTES: str = ""  # Comma-separated key=value pairs
     OTEL_ENABLED: bool = True
 
     @field_validator("CORS_ORIGINS")
     @classmethod
-    def parse_cors_origins(cls, v) -> List[str]:
+    def parse_cors_origins(cls, v) -> list[str]:
         """Parse CORS origins from list or comma-separated string."""
         if isinstance(v, str):
             if v == "*":
@@ -127,7 +127,7 @@ class Settings(BaseSettings):
 
     @field_validator("MCP_SERVERS", mode="before")
     @classmethod
-    def parse_mcp_servers(cls, v) -> List[Dict[str, Any]]:
+    def parse_mcp_servers(cls, v) -> list[dict[str, Any]]:
         """Parse MCP servers from JSON string or list."""
         if isinstance(v, str):
             if not v.strip():
@@ -140,6 +140,66 @@ class Settings(BaseSettings):
         if isinstance(v, list):
             return v
         return []
+
+    @field_validator("DATABASE_URL")
+    @classmethod
+    def validate_database_url(cls, v: str) -> str:
+        """Validate database URL format."""
+        if not v:
+            raise ValueError("DATABASE_URL is required")
+        # Must be PostgreSQL with asyncpg driver
+        if not v.startswith(("postgresql+asyncpg://", "postgresql://", "postgres://")):
+            raise ValueError(
+                "DATABASE_URL must be a PostgreSQL connection string "
+                "(postgresql+asyncpg:// or postgresql://)"
+            )
+        return v
+
+    @field_validator("EMBEDDING_ENDPOINT_URL")
+    @classmethod
+    def validate_embedding_url(cls, v: str) -> str:
+        """Validate embedding endpoint URL format."""
+        if not v:
+            raise ValueError("EMBEDDING_ENDPOINT_URL is required")
+        if not v.startswith(("http://", "https://")):
+            raise ValueError("EMBEDDING_ENDPOINT_URL must be a valid HTTP(S) URL")
+        return v.rstrip("/")
+
+    @field_validator("DB_POOL_SIZE", "DB_MAX_OVERFLOW", "DB_POOL_TIMEOUT")
+    @classmethod
+    def validate_positive_int(cls, v: int) -> int:
+        """Validate positive integer values."""
+        if v < 0:
+            raise ValueError("Value must be a non-negative integer")
+        return v
+
+    @field_validator("EMBEDDING_DIMENSION")
+    @classmethod
+    def validate_embedding_dimension(cls, v: int) -> int:
+        """Validate embedding dimension is reasonable."""
+        if v < 1 or v > 10000:
+            raise ValueError("EMBEDDING_DIMENSION must be between 1 and 10000")
+        return v
+
+    @field_validator("EMBEDDING_TIMEOUT", "MCP_REQUEST_TIMEOUT")
+    @classmethod
+    def validate_timeout(cls, v: float) -> float:
+        """Validate timeout values are positive."""
+        if v <= 0:
+            raise ValueError("Timeout must be a positive number")
+        if v > 600:
+            raise ValueError("Timeout should not exceed 600 seconds")
+        return v
+
+    @field_validator("WORKERS")
+    @classmethod
+    def validate_workers(cls, v: int) -> int:
+        """Validate worker count is reasonable."""
+        if v < 1:
+            raise ValueError("WORKERS must be at least 1")
+        if v > 32:
+            raise ValueError("WORKERS should not exceed 32")
+        return v
 
 
 @lru_cache()

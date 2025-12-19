@@ -2,7 +2,7 @@
 
 import math
 import re
-from typing import Any, Dict, List
+from typing import Any
 
 import jsonschema
 from pydantic import ValidationError as PydanticValidationError
@@ -15,7 +15,7 @@ class ValidationError(Exception):
     pass
 
 
-def validate_embedding_vector(embedding: List[float]) -> List[float]:
+def validate_embedding_vector(embedding: list[float]) -> list[float]:
     """Validate embedding vector format and values."""
     if not isinstance(embedding, list):
         raise ValidationError("Embedding must be a list of floats")
@@ -85,7 +85,7 @@ def validate_category(category: str) -> str:
     return category
 
 
-def validate_tags(tags: List[str]) -> List[str]:
+def validate_tags(tags: list[str]) -> list[str]:
     """Validate tool tags format."""
     if not isinstance(tags, list):
         raise ValidationError("Tags must be a list")
@@ -115,7 +115,7 @@ def validate_tags(tags: List[str]) -> List[str]:
     return list(dict.fromkeys(validated_tags))[:20]  # Max 20 unique tags
 
 
-def validate_json_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
+def validate_json_schema(schema: dict[str, Any]) -> dict[str, Any]:
     """Validate JSON schema format."""
     if not isinstance(schema, dict):
         raise ValidationError("Schema must be a dictionary")
@@ -242,7 +242,7 @@ def sanitize_string(value: str, max_length: int = 1000) -> str:
     return value.strip()
 
 
-def validate_tool_arguments(arguments: Dict[str, Any], input_schema: Dict[str, Any]) -> Dict[str, Any]:
+def validate_tool_arguments(arguments: dict[str, Any], input_schema: dict[str, Any]) -> dict[str, Any]:
     """Validate tool arguments against input schema."""
     if not isinstance(arguments, dict):
         raise ValidationError("Arguments must be a dictionary")
@@ -263,7 +263,7 @@ def validate_tool_arguments(arguments: Dict[str, Any], input_schema: Dict[str, A
     return arguments
 
 
-def create_safe_error_response(error: Exception, include_details: bool = False) -> Dict[str, Any]:
+def create_safe_error_response(error: Exception, include_details: bool = False) -> dict[str, Any]:
     """Create a safe error response that doesn't expose sensitive information."""
     error_type = type(error).__name__
 
@@ -349,3 +349,158 @@ class SecurityValidator:
         value = SecurityValidator.validate_no_xss(value)
 
         return sanitize_string(value)
+
+
+# ============================================================================
+# Database Query Sanitization Utilities
+# ============================================================================
+
+def sanitize_like_pattern(value: str) -> str:
+    """
+    Sanitize a string for use in SQL LIKE patterns.
+
+    Escapes special LIKE characters (%, _, [) to prevent pattern injection.
+    Use with parameterized queries: WHERE column LIKE :pattern
+
+    Args:
+        value: The raw search string
+
+    Returns:
+        Escaped string safe for LIKE patterns
+    """
+    if not isinstance(value, str):
+        raise ValidationError("Value must be a string")
+
+    # Escape LIKE special characters
+    value = value.replace("\\", "\\\\")  # Escape backslash first
+    value = value.replace("%", "\\%")
+    value = value.replace("_", "\\_")
+    value = value.replace("[", "\\[")
+
+    return value
+
+
+def validate_identifier(identifier: str, identifier_type: str = "identifier") -> str:
+    """
+    Validate a SQL identifier (table name, column name, etc.).
+
+    Only allows safe characters to prevent SQL injection when identifiers
+    must be used dynamically (should be avoided when possible).
+
+    Args:
+        identifier: The identifier to validate
+        identifier_type: Type of identifier for error messages
+
+    Returns:
+        Validated identifier
+
+    Raises:
+        ValidationError: If identifier contains invalid characters
+    """
+    if not isinstance(identifier, str):
+        raise ValidationError(f"{identifier_type} must be a string")
+
+    identifier = identifier.strip()
+
+    if not identifier:
+        raise ValidationError(f"{identifier_type} cannot be empty")
+
+    if len(identifier) > 128:
+        raise ValidationError(f"{identifier_type} cannot exceed 128 characters")
+
+    # Only allow alphanumeric and underscores (standard SQL identifier rules)
+    if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', identifier):
+        raise ValidationError(
+            f"{identifier_type} can only contain letters, numbers, and underscores, "
+            "and must start with a letter or underscore"
+        )
+
+    # Check against reserved SQL keywords
+    sql_keywords = {
+        "select", "insert", "update", "delete", "drop", "create", "alter",
+        "table", "database", "index", "from", "where", "and", "or", "not",
+        "union", "join", "left", "right", "inner", "outer", "on", "as",
+        "order", "by", "group", "having", "limit", "offset", "null", "true",
+        "false", "exec", "execute", "grant", "revoke", "truncate",
+    }
+    if identifier.lower() in sql_keywords:
+        raise ValidationError(f"{identifier_type} cannot be a SQL reserved keyword")
+
+    return identifier
+
+
+def validate_sort_column(
+    column: str,
+    allowed_columns: set[str],
+    default: str = "id"
+) -> str:
+    """
+    Validate a sort column name against an allowed list.
+
+    Always use this when accepting sort columns from user input to prevent
+    SQL injection through ORDER BY clauses.
+
+    Args:
+        column: The requested sort column
+        allowed_columns: Set of allowed column names
+        default: Default column to use if invalid
+
+    Returns:
+        Validated column name from allowed list
+    """
+    if not isinstance(column, str):
+        return default
+
+    column = column.strip().lower()
+
+    if column in allowed_columns:
+        return column
+
+    return default
+
+
+def validate_sort_direction(direction: str, default: str = "asc") -> str:
+    """
+    Validate sort direction.
+
+    Args:
+        direction: The requested sort direction
+        default: Default direction if invalid
+
+    Returns:
+        'asc' or 'desc'
+    """
+    if not isinstance(direction, str):
+        return default
+
+    direction = direction.strip().lower()
+
+    if direction in ("asc", "desc"):
+        return direction
+
+    return default
+
+
+def validate_integer_id(value: Any, field_name: str = "ID") -> int:
+    """
+    Validate and convert a value to a positive integer ID.
+
+    Args:
+        value: The value to validate
+        field_name: Name of the field for error messages
+
+    Returns:
+        Validated positive integer
+
+    Raises:
+        ValidationError: If value is not a valid positive integer
+    """
+    try:
+        int_value = int(value)
+    except (TypeError, ValueError):
+        raise ValidationError(f"{field_name} must be an integer")
+
+    if int_value <= 0:
+        raise ValidationError(f"{field_name} must be a positive integer")
+
+    return int_value

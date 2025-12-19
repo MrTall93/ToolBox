@@ -1,6 +1,6 @@
 # Toolbox - Tool Registry with MCP & LiteLLM Integration
 
-A comprehensive Model Context Protocol (MCP) server for tool registration, discovery, and management with semantic search capabilities and seamless LiteLLM integration. Built with Python, FastAPI, and PostgreSQL + pgvector for production-ready deployment.
+A comprehensive Model Context Protocol (MCP) server for tool registration, discovery, and management with semantic search capabilities and seamless LiteLLM integration. Built with Python 3.11+, FastAPI, FastMCP, and PostgreSQL + pgvector for production-ready deployment.
 
 > **Note**: This project provides a centralized tool registry that syncs with external MCP servers and integrates with LiteLLM for unified tool access across multiple LLM providers.
 
@@ -12,6 +12,7 @@ A comprehensive Model Context Protocol (MCP) server for tool registration, disco
 - [Kubernetes Deployment](#kubernetes-deployment)
 - [API Documentation](#api-documentation)
 - [Configuration](#configuration)
+- [Code Quality](#code-quality)
 
 ## Features
 
@@ -23,6 +24,8 @@ A comprehensive Model Context Protocol (MCP) server for tool registration, disco
 
 ### MCP Server Integration
 - **FastMCP Server**: Built on the fastmcp framework for optimal performance
+- **MCP Resources**: Exposes registry data via MCP resources (`toolbox://categories`, `toolbox://stats`, `toolbox://tools/{category}`)
+- **MCP Prompts**: Reusable prompt templates for tool discovery, execution, and workflow planning
 - **Automatic External MCP Server Discovery**: Connects to external MCP servers and syncs their tools
 - **Bidirectional Sync**:
   - Syncs tools FROM external MCP servers
@@ -40,8 +43,10 @@ A comprehensive Model Context Protocol (MCP) server for tool registration, disco
 ### Production-Ready
 - Complete Kubernetes deployment with production-grade manifests
 - PostgreSQL with pgvector extension for vector storage
-- All configuration externalized via environment variables
-- Health checks, metrics, and OpenTelemetry observability support
+- All configuration externalized via environment variables with validation
+- Health checks (liveness, readiness with proper HTTP 503 responses), metrics, and OpenTelemetry observability support
+- Modern Python 3.11+ with type hints (`X | None`, `list[str]`, `dict[str, Any]`)
+- Comprehensive input validation and SQL injection protection
 - Python 3.11 slim-based Docker containers
 
 ## Architecture
@@ -330,11 +335,30 @@ kubectl port-forward svc/toolbox-mcp-http 8080:8080 -n toolbox
 
 3. Connect MCP Inspector to: `http://localhost:8080/mcp`
 
-Available tools in MCP Inspector:
-- `find_tools` - Search for tools using natural language
-- `call_tool` - Execute a tool by name
-- `list_tools` - List all available tools
-- `get_tool_schema` - Get schema for a specific tool
+### Available MCP Tools
+
+| Tool | Description |
+|------|-------------|
+| `find_tools` | Search for tools using natural language |
+| `call_tool` | Execute a tool by name |
+| `list_tools` | List all available tools |
+| `get_tool_schema` | Get schema for a specific tool |
+
+### Available MCP Resources
+
+| Resource URI | Description |
+|--------------|-------------|
+| `toolbox://categories` | List all tool categories |
+| `toolbox://stats` | Registry statistics (counts by category, implementation type) |
+| `toolbox://tools/{category}` | List tools in a specific category |
+
+### Available MCP Prompts
+
+| Prompt | Description |
+|--------|-------------|
+| `tool_discovery_prompt` | Generate a prompt for discovering tools for a task |
+| `tool_execution_prompt` | Generate a prompt for executing a specific tool |
+| `workflow_planning_prompt` | Generate a prompt for planning multi-tool workflows |
 
 ## Troubleshooting
 
@@ -372,6 +396,38 @@ kubectl exec -it deployment/toolbox -n toolbox -- python3 -c \
 kubectl exec -it deployment/postgres -n toolbox -- psql -U toolregistry \
   -d toolregistry -c "SELECT COUNT(*) FROM tools;"
 ```
+
+## Code Quality
+
+This project follows FastAPI, FastMCP, and Python best practices:
+
+### FastAPI Best Practices
+- **Lifespan Context Manager**: Uses `@asynccontextmanager` for startup/shutdown instead of deprecated `@app.on_event()`
+- **Annotated Dependencies**: Uses `Annotated[Type, Depends()]` for cleaner dependency injection
+- **Response Models**: All endpoints define response models including error cases (400, 404, 500)
+- **Proper HTTP Status Codes**: Readiness probe returns HTTP 503 when not ready
+
+### Python Best Practices
+- **Modern Type Hints**: Uses Python 3.11+ syntax (`str | None`, `list[str]`, `dict[str, Any]`)
+- **Pydantic v2**: Uses `model_config = ConfigDict()` instead of nested `Config` class
+- **Module Exports**: All modules define `__all__` for explicit public API
+
+### Security
+- **Input Validation**: Comprehensive validation for all user inputs
+- **SQL Injection Protection**: Parameterized queries and identifier validation
+- **XSS Prevention**: Input sanitization for string values
+- **Configuration Validation**: URL format, positive integers, reasonable ranges
+
+### Observability
+- **OpenTelemetry**: Full tracing and metrics with noop fallbacks when disabled
+- **Structured Logging**: Exception logging with `logger.exception()` for stack traces
+- **Health Checks**: Detailed health endpoints with component-level status
+
+### Database
+- **Connection Pooling**: Configurable pool size, overflow, timeout, and connection recycling
+- **Async Operations**: Full async/await support with SQLAlchemy 2.0
+
+For detailed improvement history, see [tickets.md](tickets.md).
 
 ---
 
