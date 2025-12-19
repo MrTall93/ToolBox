@@ -40,6 +40,13 @@ A comprehensive Model Context Protocol (MCP) server for tool registration, disco
 - **Automatic Sync**: Syncs tools from LiteLLM MCP servers on startup
 - **Tool Deletion**: Deactivates tools that no longer exist in LiteLLM
 
+### Output Summarization
+- **Token-Efficient Tool Execution**: `call_tool_summarized` automatically summarizes large tool outputs to reduce token usage by 80-90%
+- **Configurable Thresholds**: Set `max_tokens` to control when summarization triggers (default: 2000 tokens)
+- **Context-Aware Summaries**: Provide `summarization_context` hints to focus summaries on relevant information (e.g., "Focus on error messages")
+- **Graceful Fallback**: Falls back to truncation if LLM summarization fails
+- **Transparency**: Response includes `was_summarized` flag and token estimates
+
 ### Production-Ready
 - Complete Kubernetes deployment with production-grade manifests
 - PostgreSQL with pgvector extension for vector storage

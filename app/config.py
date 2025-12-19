@@ -86,6 +86,28 @@ class Settings(BaseSettings):
     LITELLM_MCP_TIMEOUT: int = 30
     LITELLM_MCP_MAX_RETRIES: int = 3
 
+    # Summarization Settings
+    SUMMARIZATION_ENABLED: bool = Field(
+        default=True,
+        description="Enable/disable output summarization feature"
+    )
+    SUMMARIZATION_MODEL: str = Field(
+        default="claude-3-5-haiku-latest",
+        description="Model to use for summarization (should be fast/cheap)"
+    )
+    SUMMARIZATION_DEFAULT_MAX_TOKENS: int = Field(
+        default=2000,
+        description="Default max tokens before summarization triggers"
+    )
+    SUMMARIZATION_TIMEOUT: float = Field(
+        default=30.0,
+        description="Timeout for summarization requests in seconds"
+    )
+    SUMMARIZATION_MAX_INPUT_CHARS: int = Field(
+        default=50000,
+        description="Maximum characters to send for summarization (truncate before)"
+    )
+
     # OpenTelemetry Configuration
     OTEL_EXPORTER_OTLP_ENDPOINT: str | None = None
     OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: str | None = None
@@ -199,6 +221,36 @@ class Settings(BaseSettings):
             raise ValueError("WORKERS must be at least 1")
         if v > 32:
             raise ValueError("WORKERS should not exceed 32")
+        return v
+
+    @field_validator("SUMMARIZATION_DEFAULT_MAX_TOKENS")
+    @classmethod
+    def validate_summarization_max_tokens(cls, v: int) -> int:
+        """Validate summarization max tokens is reasonable."""
+        if v < 100:
+            raise ValueError("SUMMARIZATION_DEFAULT_MAX_TOKENS must be at least 100")
+        if v > 50000:
+            raise ValueError("SUMMARIZATION_DEFAULT_MAX_TOKENS should not exceed 50000")
+        return v
+
+    @field_validator("SUMMARIZATION_TIMEOUT")
+    @classmethod
+    def validate_summarization_timeout(cls, v: float) -> float:
+        """Validate summarization timeout is reasonable."""
+        if v <= 0:
+            raise ValueError("SUMMARIZATION_TIMEOUT must be positive")
+        if v > 120:
+            raise ValueError("SUMMARIZATION_TIMEOUT should not exceed 120 seconds")
+        return v
+
+    @field_validator("SUMMARIZATION_MAX_INPUT_CHARS")
+    @classmethod
+    def validate_summarization_max_input(cls, v: int) -> int:
+        """Validate max input characters is reasonable."""
+        if v < 1000:
+            raise ValueError("SUMMARIZATION_MAX_INPUT_CHARS must be at least 1000")
+        if v > 200000:
+            raise ValueError("SUMMARIZATION_MAX_INPUT_CHARS should not exceed 200000")
         return v
 
 

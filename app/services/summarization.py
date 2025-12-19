@@ -1,41 +1,3 @@
-# TICKET-001: Create Summarization Service
-
-## Overview
-Create a new service that summarizes large tool outputs using LiteLLM to reduce token usage in the agent's context window.
-
-## Priority
-High
-
-## Estimated Effort
-4-6 hours
-
-## Background
-When tools return large outputs (internal docs, logs, API responses), this consumes many tokens in the agent's context. We need a service that can summarize these outputs while preserving relevant information.
-
-## Requirements
-
-### Functional Requirements
-1. Estimate token count for any string input
-2. Serialize various output types (dict, list, string) to string
-3. Summarize content using LiteLLM's chat completions API
-4. Only summarize when content exceeds a specified token threshold
-5. Fall back to truncation if summarization fails
-
-### Non-Functional Requirements
-1. Use existing HTTP client utilities (`create_http_client`)
-2. Follow existing code patterns in `app/services/`
-3. Add comprehensive logging
-4. Handle errors gracefully
-
----
-
-## Implementation Steps
-
-### Step 1: Create the file
-Create a new file: `app/services/summarization.py`
-
-### Step 2: Add imports
-```python
 """
 Summarization service for reducing tool output token usage.
 
@@ -53,21 +15,12 @@ from app.config import settings
 from app.utils.http import create_http_client
 
 logger = logging.getLogger(__name__)
-```
 
-### Step 3: Add token estimation constants and function
-
-**Why**: We need to estimate how many tokens a string will use. This helps us decide if summarization is needed.
-
-**Constant**:
-```python
 # Approximate tokens per character ratio (conservative estimate)
 # Most tokenizers average ~4 characters per token for English text
 CHARS_PER_TOKEN = 4
-```
 
-**Function**:
-```python
+
 def estimate_tokens(text: str) -> int:
     """
     Estimate token count for a string.
@@ -84,13 +37,8 @@ def estimate_tokens(text: str) -> int:
     if not text:
         return 0
     return len(text) // CHARS_PER_TOKEN
-```
 
-### Step 4: Add output serialization function
 
-**Why**: Tool outputs can be dicts, lists, strings, etc. We need to convert them to strings for summarization.
-
-```python
 def serialize_output(output: Any) -> str:
     """
     Serialize tool output to string for summarization.
@@ -107,13 +55,8 @@ def serialize_output(output: Any) -> str:
         return json.dumps(output, indent=2, default=str)
     except (TypeError, ValueError):
         return str(output)
-```
 
-### Step 5: Create the SummarizationService class
 
-**Why**: Encapsulates all summarization logic in a reusable service.
-
-```python
 class SummarizationService:
     """
     Service for summarizing large tool outputs via LiteLLM.
@@ -123,30 +66,26 @@ class SummarizationService:
         self,
         litellm_url: str | None = None,
         litellm_api_key: str | None = None,
-        model: str = "claude-3-5-haiku-latest",
-        timeout: float = 30.0,
+        model: str | None = None,
+        timeout: float | None = None,
     ):
         """
         Initialize the summarization service.
 
         Args:
-            litellm_url: LiteLLM proxy URL (defaults to settings.LITELLM_MCP_SERVER_URL)
-            litellm_api_key: LiteLLM API key (defaults to settings.LITELLM_MCP_API_KEY)
-            model: Model to use for summarization (should be fast/cheap like Haiku)
-            timeout: Request timeout in seconds
+            litellm_url: LiteLLM proxy URL (defaults to settings)
+            litellm_api_key: LiteLLM API key (defaults to settings)
+            model: Model to use for summarization (defaults to settings)
+            timeout: Request timeout in seconds (defaults to settings)
         """
         self.litellm_url = (litellm_url or settings.LITELLM_MCP_SERVER_URL).rstrip("/")
         self.litellm_api_key = litellm_api_key or settings.LITELLM_MCP_API_KEY
-        self.model = model
-        self.timeout = timeout
+        self.model = model or settings.SUMMARIZATION_MODEL
+        self.timeout = timeout or settings.SUMMARIZATION_TIMEOUT
+        self.max_input_chars = settings.SUMMARIZATION_MAX_INPUT_CHARS
+        self.enabled = settings.SUMMARIZATION_ENABLED
         self.logger = logging.getLogger(__name__)
-```
 
-### Step 6: Add the main `summarize` method
-
-**Why**: This is the core method that calls LiteLLM to summarize content.
-
-```python
     async def summarize(
         self,
         content: str,
@@ -194,7 +133,7 @@ Rules:
 {context}
 
 Tool Output:
-{content[:50000]}
+{content[:self.max_input_chars]}
 
 Provide a focused summary that captures the essential information."""
 
@@ -237,13 +176,7 @@ Provide a focused summary that captures the essential information."""
         except Exception as e:
             self.logger.error(f"Summarization failed: {e}")
             raise RuntimeError(f"Summarization failed: {e}")
-```
 
-### Step 7: Add the `summarize_if_needed` convenience method
-
-**Why**: This method checks if summarization is needed and handles the decision logic.
-
-```python
     async def summarize_if_needed(
         self,
         content: Any,
@@ -265,6 +198,10 @@ Provide a focused summary that captures the essential information."""
             - processed_content: Either original content or summary
             - was_summarized: True if content was summarized, False otherwise
         """
+        # Check if summarization is enabled (will be configurable in TICKET-003)
+        if not self.enabled:
+            return serialize_output(content), False
+
         content_str = serialize_output(content)
         estimated_tokens = estimate_tokens(content_str)
 
@@ -294,13 +231,8 @@ Provide a focused summary that captures the essential information."""
             if len(content_str) > len(truncated):
                 truncated += "\n\n[Output truncated due to length]"
             return truncated, True
-```
 
-### Step 8: Add global service instance helper
 
-**Why**: Provides a singleton pattern for easy access throughout the app.
-
-```python
 # Global service instance
 _summarization_service: SummarizationService | None = None
 
@@ -318,29 +250,3 @@ def get_summarization_service() -> SummarizationService:
         _summarization_service = SummarizationService()
 
     return _summarization_service
-```
-
----
-
-## Testing Checklist
-
-After implementation, verify:
-
-- [ ] `estimate_tokens("hello world")` returns approximately 2-3
-- [ ] `serialize_output({"key": "value"})` returns valid JSON string
-- [ ] `serialize_output("plain text")` returns "plain text"
-- [ ] Service initializes with default settings from `app/config.py`
-- [ ] `summarize_if_needed` returns `(content, False)` when under threshold
-- [ ] `summarize_if_needed` returns `(summary, True)` when over threshold
-- [ ] Fallback truncation works when LiteLLM is unavailable
-
-## Files to Modify
-- `app/services/summarization.py` (create new)
-- `app/services/__init__.py` (add export)
-
-## Dependencies
-- No new dependencies needed (uses existing `httpx`, `app.config`, `app.utils.http`)
-
-## Related Tickets
-- TICKET-002: Add call_tool_summarized MCP tool
-- TICKET-003: Add summarization configuration settings

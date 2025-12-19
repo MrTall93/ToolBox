@@ -1,36 +1,3 @@
-# TICKET-005: Add Integration Tests for call_tool_summarized
-
-## Overview
-Create comprehensive integration tests for the `call_tool_summarized` feature to ensure it works correctly end-to-end.
-
-## Priority
-Medium
-
-## Estimated Effort
-3-4 hours
-
-## Prerequisites
-- TICKET-001 (Summarization Service) must be completed
-- TICKET-002 (call_tool_summarized) must be completed
-- TICKET-004 (Services init) must be completed
-
-## Background
-We need to test the full flow of the summarization feature:
-1. Tool execution
-2. Output size checking
-3. LiteLLM summarization call
-4. Response formatting
-
----
-
-## Implementation Steps
-
-### Step 1: Create the test file
-Create: `tests/test_summarization_integration.py`
-
-### Step 2: Add imports and fixtures
-
-```python
 """
 Integration tests for the call_tool_summarized feature.
 
@@ -106,11 +73,8 @@ def mock_litellm_response():
             }
         ]
     }
-```
 
-### Step 3: Add unit tests for helper functions
 
-```python
 # ============================================================================
 # Unit Tests - Helper Functions
 # ============================================================================
@@ -178,11 +142,8 @@ class TestSerializeOutput:
 
         result = serialize_output(CustomObj())
         assert "custom_object" in result
-```
 
-### Step 4: Add tests for SummarizationService
 
-```python
 # ============================================================================
 # Unit Tests - SummarizationService
 # ============================================================================
@@ -196,9 +157,17 @@ class TestSummarizationService:
         with patch('app.services.summarization.settings') as mock_settings:
             mock_settings.LITELLM_MCP_SERVER_URL = "http://default:4000"
             mock_settings.LITELLM_MCP_API_KEY = None
+            mock_settings.SUMMARIZATION_MODEL = "claude-3-5-haiku-latest"
+            mock_settings.SUMMARIZATION_TIMEOUT = 30.0
+            mock_settings.SUMMARIZATION_MAX_INPUT_CHARS = 50000
+            mock_settings.SUMMARIZATION_ENABLED = True
 
             service = SummarizationService()
             assert service.litellm_url == "http://default:4000"
+            assert service.model == "claude-3-5-haiku-latest"
+            assert service.timeout == 30.0
+            assert service.max_input_chars == 50000
+            assert service.enabled is True
 
     def test_initialization_with_custom_values(self):
         """Service should accept custom initialization values."""
@@ -321,11 +290,8 @@ class TestSummarizationService:
             # Should fall back to truncation
             assert was_summarized is True
             assert "[Output truncated" in content or len(content) < len(json.dumps(large_output))
-```
 
-### Step 5: Add integration test for the MCP tool
 
-```python
 # ============================================================================
 # Integration Tests - MCP Tool
 # ============================================================================
@@ -351,7 +317,11 @@ class TestCallToolSummarizedIntegration:
 
         with patch('app.mcp_fastmcp_server.AsyncSessionLocal') as mock_session, \
              patch('app.mcp_fastmcp_server.ToolRegistry') as mock_registry, \
-             patch('app.mcp_fastmcp_server.ToolExecutor') as mock_executor:
+             patch('app.mcp_fastmcp_server.ToolExecutor') as mock_executor, \
+             patch('app.services.summarization.settings') as mock_settings:
+
+            # Setup settings
+            mock_settings.SUMMARIZATION_ENABLED = True
 
             # Setup mocks
             mock_session.return_value.__aenter__ = AsyncMock()
@@ -400,11 +370,82 @@ class TestCallToolSummarizedIntegration:
             assert result["success"] is False
             assert "not found" in result["error"]
             assert result["was_summarized"] is False
-```
 
-### Step 6: Add test for the global service instance
+    @pytest.mark.asyncio
+    async def test_full_flow_with_summarization(self):
+        """Test full flow with summarization enabled and triggered."""
+        from app.mcp_fastmcp_server import call_tool_summarized
 
-```python
+        # Mock the database session and tool registry
+        mock_tool = MagicMock()
+        mock_tool.name = "test_tool"
+        mock_tool.is_active = True
+
+        # Create large output
+        large_output = {"data": "x" * 10000}  # Large enough to trigger summarization
+        mock_result = {
+            "success": True,
+            "output": large_output,
+            "execution_time_ms": 100,
+        }
+
+        # Mock litellm response
+        mock_litellm_response = {
+            "choices": [
+                {"message": {"content": "Summarized content"}}
+            ]
+        }
+
+        with patch('app.mcp_fastmcp_server.AsyncSessionLocal') as mock_session, \
+             patch('app.mcp_fastmcp_server.ToolRegistry') as mock_registry, \
+             patch('app.mcp_fastmcp_server.ToolExecutor') as mock_executor, \
+             patch('app.services.summarization.create_http_client') as mock_client, \
+             patch('app.services.summarization.settings') as mock_settings:
+
+            # Setup settings
+            mock_settings.SUMMARIZATION_ENABLED = True
+            mock_settings.LITELLM_MCP_SERVER_URL = "http://test:4000"
+            mock_settings.LITELLM_MCP_API_KEY = None
+            mock_settings.SUMMARIZATION_MODEL = "test-model"
+            mock_settings.SUMMARIZATION_TIMEOUT = 30.0
+            mock_settings.SUMMARIZATION_MAX_INPUT_CHARS = 50000
+
+            # Setup mocks
+            mock_session.return_value.__aenter__ = AsyncMock()
+            mock_session.return_value.__aexit__ = AsyncMock()
+
+            registry_instance = AsyncMock()
+            registry_instance.get_tool_by_name = AsyncMock(return_value=mock_tool)
+            mock_registry.return_value = registry_instance
+
+            executor_instance = AsyncMock()
+            executor_instance.execute_tool = AsyncMock(return_value=mock_result)
+            mock_executor.return_value = executor_instance
+
+            # Mock HTTP client
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = mock_litellm_response
+
+            mock_context = AsyncMock()
+            mock_context.__aenter__.return_value.post = AsyncMock(return_value=mock_response)
+            mock_client.return_value = mock_context
+
+            # Call the tool
+            result = await call_tool_summarized(
+                tool_name="test_tool",
+                arguments={"arg": "value"},
+                max_tokens=500,  # Low threshold to trigger summarization
+            )
+
+            assert result["success"] is True
+            assert result["was_summarized"] is True
+            assert result["tool_name"] == "test_tool"
+            assert "original_tokens_estimate" in result
+            assert "summarized_tokens_estimate" in result
+            assert result["output"] == "Summarized content"
+
+
 # ============================================================================
 # Tests - Global Instance
 # ============================================================================
@@ -421,45 +462,12 @@ class TestGetSummarizationService:
         with patch('app.services.summarization.settings') as mock_settings:
             mock_settings.LITELLM_MCP_SERVER_URL = "http://test:4000"
             mock_settings.LITELLM_MCP_API_KEY = None
+            mock_settings.SUMMARIZATION_MODEL = "test-model"
+            mock_settings.SUMMARIZATION_TIMEOUT = 30.0
+            mock_settings.SUMMARIZATION_MAX_INPUT_CHARS = 50000
+            mock_settings.SUMMARIZATION_ENABLED = True
 
             service1 = get_summarization_service()
             service2 = get_summarization_service()
 
             assert service1 is service2
-```
-
----
-
-## Running the Tests
-
-### Run all summarization tests:
-```bash
-pytest tests/test_summarization_integration.py -v
-```
-
-### Run with coverage:
-```bash
-pytest tests/test_summarization_integration.py -v --cov=app.services.summarization --cov-report=term-missing
-```
-
-### Run specific test class:
-```bash
-pytest tests/test_summarization_integration.py::TestSummarizationService -v
-```
-
----
-
-## Files to Create/Modify
-
-1. `tests/test_summarization_integration.py` (create new)
-
-## Dependencies
-
-- pytest
-- pytest-asyncio
-- unittest.mock (standard library)
-
-## Related Tickets
-
-- TICKET-001: Create Summarization Service (prerequisite)
-- TICKET-002: Add call_tool_summarized MCP tool (prerequisite)
