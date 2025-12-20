@@ -5,6 +5,7 @@ Revises:
 Create Date: 2025-12-10 00:00:00.000000
 
 """
+import os
 from typing import Sequence, Union
 
 from alembic import op
@@ -18,8 +19,26 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def get_embedding_dimension() -> int:
+    """
+    Get embedding dimension from environment variable.
+
+    Returns:
+        int: Embedding dimension (default: 1536)
+    """
+    try:
+        dimension = int(os.getenv("EMBEDDING_DIMENSION", "1536"))
+        if dimension <= 0:
+            raise ValueError("EMBEDDING_DIMENSION must be positive")
+        return dimension
+    except ValueError as e:
+        print(f"Warning: Invalid EMBEDDING_DIMENSION, using default 1536. Error: {e}")
+        return 1536
+
+
 def upgrade() -> None:
     """Create initial schema with pgvector extension."""
+    dimension = get_embedding_dimension()
     # Enable pgvector extension
     op.execute("CREATE EXTENSION IF NOT EXISTS vector")
 
@@ -37,7 +56,7 @@ def upgrade() -> None:
         sa.Column("output_schema", sa.JSON(), nullable=True),
         sa.Column("implementation_type", sa.String(length=50), nullable=False),
         sa.Column("implementation_code", sa.Text(), nullable=True),
-        sa.Column("embedding", Vector(1024), nullable=True),  # Updated for Nomic-embed-text-v1.5
+        sa.Column("embedding", Vector(dimension), nullable=True),  # Uses configured dimension
         sa.Column("is_active", sa.Boolean(), nullable=False),
         sa.Column("version", sa.String(length=50), nullable=False),
         sa.Column("created_at", sa.DateTime(), nullable=False),

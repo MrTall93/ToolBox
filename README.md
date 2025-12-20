@@ -2,6 +2,8 @@
 
 A comprehensive Model Context Protocol (MCP) server for tool registration, discovery, and management with semantic search capabilities and seamless LiteLLM integration. Built with Python 3.11+, FastAPI, FastMCP, and PostgreSQL + pgvector for production-ready deployment.
 
+> **⚠️ Important Migration Notice**: If you're upgrading from a previous version, please read the [Embedding Dimension Migration Guide](docs/MIGRATION_EMBEDDING_DIMENSION.md) before running migrations. The embedding dimension has been updated to match the application configuration.
+
 > **Note**: This project provides a centralized tool registry that syncs with external MCP servers and integrates with LiteLLM for unified tool access across multiple LLM providers.
 
 ## Table of Contents
@@ -9,6 +11,7 @@ A comprehensive Model Context Protocol (MCP) server for tool registration, disco
 - [Features](#features)
 - [Architecture](#architecture)
 - [Quick Start](#quick-start)
+- [Upgrading](#upgrading)
 - [Kubernetes Deployment](#kubernetes-deployment)
 - [API Documentation](#api-documentation)
 - [Configuration](#configuration)
@@ -159,6 +162,51 @@ curl -X POST http://localhost:8000/mcp/call_tool \
   -H "Content-Type: application/json" \
   -d '{"tool_name": "converter-convert_temperature", "arguments": {"value": 100, "from_unit": "celsius", "to_unit": "fahrenheit"}}'
 ```
+
+## Upgrading
+
+### Embedding Dimension Migration (v1.x → v2.x)
+
+**⚠️ Important**: If you're upgrading from an earlier version, the embedding dimension has been corrected from 1024 to 1536 (configurable via `EMBEDDING_DIMENSION`).
+
+**Before upgrading:**
+
+1. **Set your embedding dimension** based on your embedding model:
+   ```bash
+   # For OpenAI text-embedding-ada-002 (default)
+   export EMBEDDING_DIMENSION=1536
+
+   # For Nomic embed-text-v1.5
+   export EMBEDDING_DIMENSION=768
+
+   # For other models, check their documentation
+   ```
+
+2. **Run the migration:**
+   ```bash
+   alembic upgrade head
+   ```
+
+   This will:
+   - Update the vector column dimension
+   - Clear existing embeddings (incompatible dimensions)
+   - Recreate the vector index
+
+3. **Regenerate embeddings:**
+   ```bash
+   # Regenerate all tool embeddings
+   python scripts/regenerate_embeddings.py
+
+   # Or with concurrent workers for faster processing
+   python scripts/regenerate_embeddings.py --concurrent 10
+
+   # Or for specific category
+   python scripts/regenerate_embeddings.py --category math
+   ```
+
+**For detailed migration instructions**, see the [Embedding Dimension Migration Guide](docs/MIGRATION_EMBEDDING_DIMENSION.md).
+
+**For fresh installations**, this migration is handled automatically - just set `EMBEDDING_DIMENSION` before running `alembic upgrade head`.
 
 ## Kubernetes Deployment
 
